@@ -3,7 +3,7 @@ Hệ thống AIoT hỗ trợ người khiếm thị bằng công nghệ nhận d
 
 # 📌 Giới thiệu
 
-BlindEye AI là một dự án kết hợp giữa AI và IoT nhằm hỗ trợ người khiếm thị nhận biết môi trường xung quanh thông qua camera điện thoại.
+SmartEyes AI là một dự án kết hợp giữa AI và IoT nhằm hỗ trợ người khiếm thị nhận biết môi trường xung quanh thông qua camera điện thoại.
 
 Hệ thống sử dụng camera trên điện thoại để quét vật thể, gửi dữ liệu hình ảnh đến server hoặc máy tính để xử lý bằng AI, sau đó trả kết quả về điện thoại dưới dạng cảnh báo bằng giọng nói.
 
