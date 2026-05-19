@@ -25,12 +25,12 @@ Ví dụ:
 -  Ứng dụng công nghệ AIoT thực tế
 
 
-# 📌 Cài đặt
+# 📌 Mô hình và thư viện
 
-# 📌 Hướng dẫn sử dụng
+# 📌 Hướng dẫn tiếp cận
 
 # 📌 Đồng sáng lập
-**Nguyễn Việt Tiến**
-**Ngô Quang Vinh**
-**Nguyễn Hoàng Hải**
+**Nguyễn Việt Tiến**|
+**Ngô Quang Vinh**|
+**Nguyễn Hoàng Hải**|
 **Trương Nhật Nam**
