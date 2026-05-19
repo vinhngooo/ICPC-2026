@@ -30,7 +30,7 @@ Ví dụ:
 # 📌 Hướng dẫn tiếp cận
 
 # 📌 Đồng sáng lập
-**Nguyễn Việt Tiến**|
-**Ngô Quang Vinh**|
-**Nguyễn Hoàng Hải**|
-**Trương Nhật Nam**
+| **Nguyễn Việt Tiến** |
+**Ngô Quang Vinh** |
+**Nguyễn Hoàng Hải** |
+**Trương Nhật Nam** |
