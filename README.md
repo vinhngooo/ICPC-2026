@@ -22,11 +22,13 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
 ---
 
 ## ⚙️ Kiến Trúc Hệ Thống (System Architecture)
-[ Smartphone: Eye/Ear ] --(Stream Video Frames qua WebSockets)--> [ Laptop Server: Brain ]
-▲                                                                  │
-│                                                           (YOLOv8 Inference)
-│                                                                  │
-└─────────────────(Hạ lệnh phát Audio Cảnh báo)────────────────────▼
+```mermaid
+graph LR
+    A[Smartphone: Eye/Ear] -->|Stream Video Frames qua WebSockets| B[Laptop Server: Brain]
+    B -->|YOLO Inference & Hạ lệnh phát Audio Cảnh báo| A
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
 ---
 
 # 📌 Tính năng chính
