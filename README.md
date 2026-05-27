@@ -22,6 +22,8 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
 ---
 
 ## ⚙️ Kiến Trúc Hệ Thống (System Architecture)
+```markdown
+
 ```mermaid
 graph LR
     A[Smartphone: Eye/Ear] -->|Stream Video Frames qua WebSockets| B[Laptop Server: Brain]
