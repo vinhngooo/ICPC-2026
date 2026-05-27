@@ -28,7 +28,11 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
            └──────────────────(Hạ lệnh phát Audio Cảnh báo)──────────────────┘
 ---
 
-# 📌 Tính năng chính
+1.  **Frontend (Mobile Web):** HTML5 Camera API (`getUserMedia`), Socket.io-client gửi frame ảnh dạng Base64/Binary, Web Audio API đảm nhận phát âm thanh cảnh báo.
+2.  **Backend (Laptop):** Python, Flask-SocketIO nhận diện luồng ảnh liên tục, chuyển đổi sang định dạng OpenCV.
+3.  **AI Core:** Thư viện `ultralytics` chạy mô hình **YOLOv8** (sử dụng phiên bản `yolov8n.pt` - Nano để tối ưu hóa tốc độ trên laptop cá nhân không có GPU rời).
+```
+## 📌 Tính năng chính
 
 -  Quét vật thể bằng camera điện thoại
 -  Gửi dữ liệu hình ảnh qua WiFi
