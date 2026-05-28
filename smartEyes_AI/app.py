@@ -113,7 +113,7 @@ def get_audio(key):
 
 @app.route("/phone")
 def phone():
-    return send_from_directory(".", "smarteyes_ui.html")
+    return send_from_directory(".", "templates/smarteyes_ui.html")
 
 if __name__ == "__main__":
     # Thêm ssl_context='adhoc' để bắt buộc chạy HTTPS
