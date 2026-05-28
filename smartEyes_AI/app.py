@@ -24,6 +24,8 @@ latest_alert = {"message": "", "timestamp": 0, "label": ""}
 last_spoken = {}
 COOLDOWN = 4
 
+frame_queue = queue.Queue(maxsize=1)
+
 os.makedirs("audio", exist_ok=True)
 
 def get_direction(box, frame_width):
@@ -100,6 +102,16 @@ def process_frame():
             last_spoken[best_label] = now
             print(f"🔊 {msg}")
 
+    # Lấy ảnh có khung YOLO vẽ sẵn
+    annotated = results[0].plot()
+    h, w = annotated.shape[:2]
+    cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
+    cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
+
+    # Đưa ảnh đã vẽ vào hàng đợi hiển thị (nếu hàng đợi đầy thì bỏ qua ảnh cũ)
+    if not frame_queue.full():
+        frame_queue.put(annotated)
+    
     return jsonify(latest_alert)
 
 @app.route("/audio/<path:key>")
@@ -115,10 +127,29 @@ def get_audio(key):
 def phone():
     return send_from_directory(".", "templates/smarteyes_ui.html")
 
-if __name__ == "__main__":
-    # Thêm ssl_context='adhoc' để bắt buộc chạy HTTPS
-    app.run(host="0.0.0.0", port=5000, ssl_context='adhoc')
+# Luồng chạy Server Flask riêng biệt
+def start_flask():
+    app.run(host="0.0.0.0", port=5000, ssl_context='adhoc', use_reloader=False)
 
+if __name__ == "__main__":
+    # Khởi chạy Flask chạy ngầm
+    threading.Thread(target=start_flask, daemon=True).start()
+    print("🚀 Server Flask đang chạy ngầm...")
+
+    # Luồng chính (Main Thread) tập trung làm nhiệm vụ mở và giữ cửa sổ hiển thị OpenCV
+    while True:
+        try:
+            # Chờ nhận hình ảnh từ Flask gửi sang (chờ tối đa 0.1s)
+            frame_to_show = frame_queue.get(timeout=0.1)
+            cv2.imshow("SmartEyes - Live Monitor", frame_to_show)
+        except queue.Empty:
+            pass
+
+        # Lắng nghe phím bấm, nếu bấm 'q' sẽ tắt chương trình
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv2.destroyAllWindows()
 
 
 # run link on phone : https://192.168.52.104:5000/phone
