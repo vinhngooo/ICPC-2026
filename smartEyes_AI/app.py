@@ -23,6 +23,7 @@ DANGER = {"person", "car", "motorcycle", "bus", "truck", "desk", "bench"}
 
 latest_alert = {"message": "", "timestamp": 0, "label": ""}
 last_spoken = {}
+last_seen = {}
 COOLDOWN = 4
 
 frame_queue = queue.Queue(maxsize=1)
@@ -75,6 +76,7 @@ def process_frame():
     best_box = None
     best_label = None
     best_area = 0
+    current_labels = set()
 
     for box in results[0].boxes:
         cls_id = int(box.cls[0])
@@ -87,6 +89,12 @@ def process_frame():
             best_area = area
             best_box = box
             best_label = label
+    for lbl in current_labels:
+        last_seen[lbl] = now
+
+    for lbl in list(last_spoken.keys()):
+        if now - last_seen.get(lbl, 0) > 2.0:
+            del last_spoken[lbl] 
 
     if best_box is not None:
         if now - last_spoken.get(best_label, 0) > COOLDOWN:
