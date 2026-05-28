@@ -79,7 +79,7 @@
             silentAudio.play().catch(() => {});
 
             // 2. Chụp ảnh liên tục gửi lên server
-            setInterval(sendFrameToServer, 500); // Gửi 2 hình mỗi giây
+            setInterval(sendFrameToServer, 10); 
         });
 
         async function sendFrameToServer() {
