@@ -32,15 +32,17 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
 2.  **Backend (Laptop):** Python, Flask-SocketIO nhận diện luồng ảnh liên tục, chuyển đổi sang định dạng OpenCV.
 3.  **AI Core:** Thư viện `ultralytics` chạy mô hình **YOLOv8** (sử dụng phiên bản `yolov8n.pt` - Nano để tối ưu hóa tốc độ trên laptop cá nhân không có GPU rời).
 ```
-## 📌 Tính năng chính
+## 📌 Tính năng (2 chế độ)
+# 1. Chế độ an toàn
+-  Nhận diện vật thể khi cần thiết
+-  Sử dụng khi người dùng đến các nơi an toàn như trong cửa hàng hoặc ở nhà
+-  Người dùng sẽ hỏi vị trí của đồ vật, nếu nhìn thấy, AI sẽ báo cho người dùng
 
--  Quét vật thể bằng camera điện thoại
--  Gửi dữ liệu hình ảnh qua WiFi
--  Nhận diện vật thể bằng AI
--  Cảnh báo bằng giọng nói
--  Phát hiện vật cản nguy hiểm
--  Giao diện thân thiện trên điện thoại
--  Ứng dụng công nghệ AIoT thực tế
+# 2. Chế độ cảnh báo
+-  Sử dụng khi người dùng tham gia giao thông, hoạt động ở ngoài
+-  Cảnh báo bằng giọng nói khi có vật cản hoặc xe cộ nguy hiểm
+-  Phát hiện các biển báo và đọc thông tin biển báo cho người dùng
+
 
 
 # 📌 Mô hình và thư viện
