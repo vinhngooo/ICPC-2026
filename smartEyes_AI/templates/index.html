@@ -1,98 +1,122 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Blind Assist Link</title>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <title>SmartEyes - Camera Web</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background-color: #111;
-            color: #fff;
+            font-family: sans-serif;
             text-align: center;
-            padding: 20px;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            padding: 10px;
         }
-        #status {
-            font-size: 1.5rem;
-            margin-top: 20px;
-            color: #00ffcc;
-        }
-        video {
+        #videoElement {
             width: 100%;
             max-width: 400px;
             border-radius: 10px;
-            border: 2px solid #333;
+            border: 2px solid #4CAF50;
+
+        }
+        #alertBox {
+            font-size: 22px;
+            font-weight: bold;
+            color: #ff5252;
+            margin-top: 15px;
+            min-height: 30px;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
 
-    <h2>AI Real-Time Navigation Unit</h2>
-    <video id="webcam" autoplay playsinline muted></video>
-    <canvas id="hiddenCanvas" style="display:none;"></canvas>
+    <h2>SmartEyes</h2>
+    <button id="startBtn">Mở Camera & Cảnh báo</button>
 
-    <div id="status">Connecting to Brain...</div>
+    <div>
+        <video id="videoElement" autoplay playsinline></video>
+    </div>
+
+    <div id="alertBox">Đang chờ tín hiệu...</div>
+    <canvas id="canvas" style="display:none;"></canvas>
 
     <script>
-        const socket = io();
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('hiddenCanvas');
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const statusDiv = document.getElementById('status');
+        const alertBox = document.getElementById('alertBox');
 
-        let lastSpokenText = "";
-        let isSpeaking = false;
+        let lastTimestamp = 0;
+        let isProcessing = false;
 
-        // Establish connection status
-        socket.on('connect', () => {
-            statusDiv.innerText = "System Engaged. Streaming Camera...";
-            startStreaming();
-        });
+        document.getElementById('startBtn').addEventListener('click', async function() {
+            this.style.display = 'none';
 
-        // Initialize user device back-facing camera stream
-        navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment", width: 640, height: 480 },
-            audio: false
-        })
-        .then(stream => {
-            video.srcObject = stream;
-        })
-        .catch(err => {
-            statusDiv.innerText = "Camera access denied or unavailable.";
-            console.error(err);
-        });
-
-        function startStreaming() {
-            // Set canvas rendering dimensions match
-            canvas.width = 320;
-            canvas.height = 240;
-
-            // Stream loops a frame every 150ms to maintain real-time tracking without choking network bandwidth
-            setInterval(() => {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6); // Compress to 60% quality JPEG
-                    socket.emit('video_frame', dataUrl);
-                }
-            }, 150);
-        }
-
-        // Catch directional/obstacle audio payloads from server
-        socket.on('navigation_instruction', (data) => {
-            const message = data.message;
-            statusDiv.innerText = "Instruction: " + message;
-
-            // Voice Engine Execution: Prevent repetitive loops and overlaps
-            if (message !== "Clear" && message !== lastSpokenText && !window.speechSynthesis.speaking) {
-                lastSpokenText = message;
-                const utterance = new SpeechSynthesisUtterance(message);
-                utterance.rate = 1.2; // Speed up speech slightly for snappier real-time response
-                window.speechSynthesis.speak(utterance);
-            } else if (message === "Clear") {
-                lastSpokenText = ""; // Reset history if way is completely clear
+            // 1. Xin quyền mở camera trước
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment" }, // "user" là camera trước, "environment" là cam sau
+                    audio: false
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                alert("Lỗi mở camera: " + err.message);
+                return;
             }
+
+            // Phát âm thanh im lặng để cấp quyền autoplay
+            let silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+            silentAudio.play().catch(() => {});
+
+            // 2. Chụp ảnh liên tục gửi lên server
+            setInterval(sendFrameToServer, 500); // Gửi 2 hình mỗi giây
         });
+
+        async function sendFrameToServer() {
+            if (isProcessing || !video.videoWidth) return;
+            isProcessing = true;
+
+            // Đặt kích thước canvas bằng video
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Nén ảnh thành base64 (chất lượng 0.6 để gửi cho nhanh)
+            const imageData = canvas.toDataURL('image/jpeg', 0.6);
+
+            try {
+                const response = await fetch('/process_frame', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: imageData })
+                });
+
+                const data = await response.json();
+
+                // Nhận và phát cảnh báo
+                if (data.timestamp > lastTimestamp && data.label !== "") {
+                    lastTimestamp = data.timestamp;
+                    alertBox.innerText = data.message;
+
+                    const audio = new Audio(`/audio/${data.label}`);
+                    audio.play().catch(e => console.error("Lỗi loa:", e));
+                }
+            } catch (err) {
+                console.error("Lỗi gửi ảnh:", err);
+            } finally {
+                isProcessing = false;
+            }
+        }
     </script>
 </body>
 </html>
