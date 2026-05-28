@@ -3,58 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartEyes - Camera Web</title>
+    <title>SmartEyes - Cyber Monitor</title>
     <style>
+        :root {
+            --neon-green: #00ff9d;
+            --neon-blue: #00e5ff;
+            --glass-bg: rgba(16, 20, 24, 0.7);
+        }
         body {
-            font-family: sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             text-align: center;
-            background-color: #121212;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #0f0f1a 100%);
             color: white;
             margin: 0;
-            padding: 10px;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h2 {
+            color: var(--neon-blue);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            text-shadow: 0 0 10px var(--neon-blue);
+        }
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+        #videoContainer {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid var(--neon-green);
+            box-shadow: 0 0 15px rgba(0, 255, 157, 0.4);
+            margin-bottom: 15px;
         }
         #videoElement {
             width: 100%;
-            max-width: 400px;
-            border-radius: 10px;
-            border: 2px solid #4CAF50;
-
+            display: block;
+        }
+        #videoOverlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(rgba(0, 255, 157, 0.1) 1px, transparent 1px);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 2;
         }
         #alertBox {
-            font-size: 22px;
+            font-size: 20px;
             font-weight: bold;
-            color: #ff5252;
-            margin-top: 15px;
+            color: #ff2a6d;
+            margin-top: 10px;
             min-height: 30px;
+            text-shadow: 0 0 8px #ff2a6d;
+            letter-spacing: 1px;
         }
         button {
-            padding: 12px 24px;
-            font-size: 18px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            background: transparent;
+            color: var(--neon-green);
+            border: 2px solid var(--neon-green);
             border-radius: 8px;
-            margin-bottom: 15px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(0, 255, 157, 0.2) inset;
+            margin-bottom: 20px;
+        }
+        button:hover {
+            background: var(--neon-green);
+            color: #000;
+            box-shadow: 0 0 20px var(--neon-green);
         }
     </style>
 </head>
 <body>
 
-    <h2>SmartEyes</h2>
-    <button id="startBtn">Mở Camera & Cảnh báo</button>
+    <h2>SmartEyes UI</h2>
+    <button id="startBtn">Kích hoạt Camera</button>
 
-    <div>
-        <video id="videoElement" autoplay playsinline></video>
+    <div class="glass-panel">
+        <div id="videoContainer">
+            <video id="videoElement" autoplay playsinline></video>
+            <div id="videoOverlay"></div>
+        </div>
+        <div id="alertBox">Đang chờ tín hiệu...</div>
     </div>
 
-    <div id="alertBox">Đang chờ tín hiệu...</div>
     <canvas id="canvas" style="display:none;"></canvas>
+    <audio id="alertAudio"></audio>
 
     <script>
         const video = document.getElementById('videoElement');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const alertBox = document.getElementById('alertBox');
+        const alertAudio = document.getElementById('alertAudio');
 
         let lastTimestamp = 0;
         let isProcessing = false;
@@ -62,7 +120,6 @@
         document.getElementById('startBtn').addEventListener('click', async function() {
             this.style.display = 'none';
 
-            // 1. Xin quyền mở camera trước
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: "environment" },
@@ -70,28 +127,25 @@
                 });
                 video.srcObject = stream;
             } catch (err) {
-                alert("Lỗi mở camera: " + err.message);
+                alertBox.innerText = "Lỗi mở camera: " + err.message;
                 return;
             }
 
-            // Phát âm thanh im lặng để cấp quyền autoplay
-            let silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
-            silentAudio.play().catch(() => {});
+            // Gắn file câm để cấp quyền audio vĩnh viễn
+            alertAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            alertAudio.play().catch(() => {});
 
-            // 2. Chụp ảnh liên tục gửi lên server
-            setInterval(sendFrameToServer, 10); 
+            setInterval(sendFrameToServer, 50);
         });
 
         async function sendFrameToServer() {
             if (isProcessing || !video.videoWidth) return;
             isProcessing = true;
 
-            // Đặt kích thước canvas bằng video
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Nén ảnh thành base64 (chất lượng 0.6 để gửi cho nhanh)
             const imageData = canvas.toDataURL('image/jpeg', 0.6);
 
             try {
@@ -103,16 +157,16 @@
 
                 const data = await response.json();
 
-                // Nhận và phát cảnh báo
                 if (data.timestamp > lastTimestamp && data.label !== "") {
                     lastTimestamp = data.timestamp;
-                    alertBox.innerText = data.message;
+                    alertBox.innerText = "⚠️ " + data.message;
 
-                    const audio = new Audio(`/audio/${data.label}`);
-                    audio.play().catch(e => console.error("Lỗi loa:", e));
+                    // Thêm tham số `?t=` để vượt qua Cache trình duyệt
+                    alertAudio.src = `/audio/${data.label}?t=${data.timestamp}`;
+                    alertAudio.play().catch(e => console.error("Lỗi loa:", e));
                 }
             } catch (err) {
-                console.error("Lỗi gửi ảnh:", err);
+                console.error("Lỗi mạng:", err);
             } finally {
                 isProcessing = false;
             }
