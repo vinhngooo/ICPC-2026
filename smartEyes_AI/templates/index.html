@@ -65,7 +65,7 @@
             // 1. Xin quyền mở camera trước
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment" }, // "user" là camera trước, "environment" là cam sau
+                    video: { facingMode: "environment" },
                     audio: false
                 });
                 video.srcObject = stream;
