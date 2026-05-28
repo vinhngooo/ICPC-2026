@@ -4,6 +4,7 @@ import threading
 import os
 import base64
 import numpy as np
+import queue
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from ultralytics import YOLO
@@ -18,7 +19,7 @@ VIET_LABELS = {
     "bicycle": "xe đạp", "bus": "xe buýt", "truck": "xe tải",
     "dog": "chó", "cat": "mèo"
 }
-DANGER = {"person", "car", "motorcycle", "bus", "truck"}
+DANGER = {"person", "car", "motorcycle", "bus", "truck", "desk", "bench"}
 
 latest_alert = {"message": "", "timestamp": 0, "label": ""}
 last_spoken = {}
@@ -108,9 +109,14 @@ def process_frame():
     cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
     cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
 
-    # Đưa ảnh đã vẽ vào hàng đợi hiển thị (nếu hàng đợi đầy thì bỏ qua ảnh cũ)
+    # Đưa ảnh đã vẽ vào hàng đợi hiển thị 
     if not frame_queue.full():
-        frame_queue.put(annotated)
+                try:
+            frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+    frame_queue.put(annotated)
     
     return jsonify(latest_alert)
 
@@ -136,7 +142,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_flask, daemon=True).start()
     print("🚀 Server Flask đang chạy ngầm...")
 
-    # Luồng chính (Main Thread) tập trung làm nhiệm vụ mở và giữ cửa sổ hiển thị OpenCV
+    # Hiển thị OpenCV
     while True:
         try:
             # Chờ nhận hình ảnh từ Flask gửi sang (chờ tối đa 0.1s)
@@ -144,8 +150,7 @@ if __name__ == "__main__":
             cv2.imshow("SmartEyes - Live Monitor", frame_to_show)
         except queue.Empty:
             pass
-
-        # Lắng nghe phím bấm, nếu bấm 'q' sẽ tắt chương trình
+            
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
