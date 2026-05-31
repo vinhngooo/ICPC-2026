@@ -164,5 +164,5 @@ if __name__ == "__main__":
 
     cv2.destroyAllWindows()
 
-
+# run cmd to open : ngrok http https://localhost:5000
 # run link on phone :  https://unwind-quit-detest.ngrok-free.dev/phone
