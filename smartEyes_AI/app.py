@@ -165,4 +165,4 @@ if __name__ == "__main__":
     cv2.destroyAllWindows()
 
 
-# run link on phone : https://192.168.52.104:5000/phone
+# run link on phone :  https://unwind-quit-detest.ngrok-free.dev/phone
