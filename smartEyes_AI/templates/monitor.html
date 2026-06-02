@@ -46,6 +46,13 @@
             gap: 10px;
             box-shadow: 0 0 14px rgba(0, 229, 255, 0.07);
         }
+        .cam-feed {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 255, 157, 0.3);
+            background: #000;
+            display: block;
+        }
         .card-title {
             font-size: 13px;
             letter-spacing: 2px;
@@ -109,6 +116,7 @@
                     <span class="status-dot" id="dot-${id}"></span>
                     Thiet bi ${id}
                 </div>
+                <img class="cam-feed" id="cam-${id}" src="/frame/${id}" alt="cam ${id}">
                 <div class="alert-text idle" id="alert-${id}">Chua co tin hieu...</div>
                 <div class="time-label" id="time-${id}">--:--:--</div>
             `;
@@ -152,6 +160,12 @@
         DEVICES.forEach(id => {
             setInterval(() => pollDevice(id), POLL_MS);
             pollDevice(id);
+
+            // Refresh camera feed
+            const img = document.getElementById(`cam-${id}`);
+            setInterval(() => {
+                img.src = `/frame/${id}?t=${Date.now()}`;
+            }, 200);
         });
     </script>
 </body>
