@@ -1,5 +1,7 @@
 import cv2
+import io
 import time
+import webbrowser
 import threading
 import os
 import base64
@@ -47,15 +49,18 @@ class CombinedModel:
         if self._door is not None:
             door_results = self._door(frame, verbose=False)
             for box in door_results[0].boxes:
-                box.cls[:] = self._door_id
+                box.data = box.data.clone()
+                box.data[:, 5] = self._door_id
                 results[0].boxes = _merge_boxes(results[0].boxes, box)
 
         if self._stairs is not None:
             stairs_results = self._stairs(frame, verbose=False)
             for box in stairs_results[0].boxes:
-                box.cls[:] = self._stairs_id
+                box.data = box.data.clone()
+                box.data[:, 5] = self._stairs_id
                 results[0].boxes = _merge_boxes(results[0].boxes, box)
 
+        results[0].names = self.names
         return results
 
 def _merge_boxes(base, extra):
@@ -77,7 +82,7 @@ DANGER = {"person", "car", "motorcycle", "bus", "truck", "bench",
           "bicycle", "cat", "dog", "chair", "dining table", "door", "stairs"}
 
 MAX_DEVICES = 3
-COOLDOWN = 4
+COOLDOWN = 6
 
 os.makedirs("audio", exist_ok=True)
 
@@ -90,10 +95,11 @@ def get_device_state(device_id):
         if device_id not in device_states:
             state = {
                 "infer_queue": queue.Queue(maxsize=1),
-                "frame_queue": queue.Queue(maxsize=1),
                 "latest_alert": {"message": "", "timestamp": 0, "label": ""},
                 "last_spoken": {},
                 "last_seen": {},
+                "latest_frame": None,
+                "frame_lock": threading.Lock(),
             }
             device_states[device_id] = state
             threading.Thread(target=inference_worker, args=(device_id,), daemon=True).start()
@@ -104,63 +110,68 @@ def inference_worker(device_id):
     state = device_states[device_id]
     while True:
         frame = state["infer_queue"].get()
+        try:
+            _do_inference(device_id, state, frame)
+        except Exception as e:
+            import traceback
+            print(f"[ERROR device {device_id}] {e}")
+            traceback.print_exc()
 
-        frame_height, frame_width = frame.shape[:2]
-        results = model(frame, classes=DANGER_CLASS_IDS, verbose=False)
-        now = time.time()
+def _do_inference(device_id, state, frame):
+    frame_height, frame_width = frame.shape[:2]
+    results = model(frame, classes=DANGER_CLASS_IDS, verbose=False)
+    now = time.time()
 
-        best_box = None
-        best_label = None
-        best_area = 0
-        current_labels = set()
+    best_box = None
+    best_label = None
+    best_area = 0
+    current_labels = set()
 
-        for box in results[0].boxes:
-            cls_id = int(box.cls[0])
-            label = model.names[cls_id]
-            if label not in DANGER: continue
-            current_labels.add(label)
-            x1, y1, x2, y2 = box.xyxy[0]
-            area = (x2 - x1) * (y2 - y1)
-            if area > best_area:
-                best_area = area
-                best_box = box
-                best_label = label
+    for box in results[0].boxes:
+        cls_id = int(box.cls[0])
+        label = model.names[cls_id]
+        if label not in DANGER: continue
+        current_labels.add(label)
+        x1, y1, x2, y2 = box.xyxy[0]
+        area = (x2 - x1) * (y2 - y1)
+        if area > best_area:
+            best_area = area
+            best_box = box
+            best_label = label
 
-        last_seen = state["last_seen"]
-        last_spoken = state["last_spoken"]
-        latest_alert = state["latest_alert"]
+    last_seen = state["last_seen"]
+    last_spoken = state["last_spoken"]
+    latest_alert = state["latest_alert"]
 
-        for lbl in current_labels:
-            last_seen[lbl] = now
-        for lbl in list(last_spoken.keys()):
-            if now - last_seen.get(lbl, 0) > 2.0:
-                del last_spoken[lbl]
+    for lbl in current_labels:
+        last_seen[lbl] = now
+    for lbl in list(last_spoken.keys()):
+        if now - last_seen.get(lbl, 0) > 2.0:
+            del last_spoken[lbl]
 
-        if best_box is not None:
-            if now - last_spoken.get(best_label, 0) > COOLDOWN:
-                direction = get_direction(best_box, frame_width)
-                distance = get_distance(best_box, frame_width, frame_height)
-                msg = build_message(best_label, direction, distance)
-                audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
-                threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
-                latest_alert["message"] = msg
-                latest_alert["timestamp"] = now
-                latest_alert["label"] = audio_key
-                last_spoken[best_label] = now
-                print(f"[Thiet bi {device_id}] {msg}")
+    if best_box is not None:
+        if now - last_spoken.get(best_label, 0) > COOLDOWN:
+            direction = get_direction(best_box, frame_width)
+            distance = get_distance(best_box, frame_width, frame_height)
+            msg = build_message(best_label, direction, distance)
+            audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
+            threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
+            latest_alert["message"] = msg
+            latest_alert["timestamp"] = now
+            latest_alert["label"] = audio_key
+            last_spoken[best_label] = now
+            print(f"[Thiet bi {device_id}] {msg}")
 
-        annotated = results[0].plot()
-        h, w = annotated.shape[:2]
-        cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
-        cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
-        cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+    annotated = results[0].plot()
+    h, w = annotated.shape[:2]
+    cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
+    cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
+    cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
 
-        fq = state["frame_queue"]
-        if fq.full():
-            try: fq.get_nowait()
-            except queue.Empty: pass
-        fq.put(annotated)
+    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    with state["frame_lock"]:
+        state["latest_frame"] = buf.tobytes()
 
 def get_direction(box, frame_width):
     x1, y1, x2, y2 = box.xyxy[0]
@@ -247,10 +258,17 @@ def alert_state():
     state = get_device_state(device_id)
     return jsonify(state["latest_alert"])
 
-def start_flask():
-    app.run(host="0.0.0.0", port=5000, ssl_context='adhoc', use_reloader=False)
+@app.route("/frame/<device_id>")
+def get_frame(device_id):
+    state = get_device_state(device_id)
+    with state["frame_lock"]:
+        data = state["latest_frame"]
+    if data is None:
+        placeholder = make_placeholder(device_id)
+        _, buf = cv2.imencode('.jpg', placeholder)
+        data = buf.tobytes()
+    return send_file(io.BytesIO(data), mimetype='image/jpeg')
 
-# Ảnh placeholder màu tối khi chưa có thiết bị nào gửi frame
 PLACEHOLDER_H, PLACEHOLDER_W = 240, 320
 
 def make_placeholder(device_id):
@@ -262,34 +280,11 @@ def make_placeholder(device_id):
     return img
 
 if __name__ == "__main__":
-    threading.Thread(target=start_flask, daemon=True).start()
-    print("🚀 Server Flask đang chạy ngầm...")
-    print("📱 Điện thoại 1: /phone?id=1")
-    print("📱 Điện thoại 2: /phone?id=2")
-    print("📱 Điện thoại 3: /phone?id=3")
-
-    TARGET_H = 360
-
-    while True:
-        panels = []
-        for did in ["1", "2", "3"]:
-            state = get_device_state(did)
-            try:
-                frame = state["frame_queue"].get_nowait()
-            except queue.Empty:
-                frame = make_placeholder(did)
-
-            # Resize giữ tỉ lệ chiều cao cố định
-            h, w = frame.shape[:2]
-            new_w = int(w * TARGET_H / h)
-            frame = cv2.resize(frame, (new_w, TARGET_H))
-            panels.append(frame)
-
-        combined = np.hstack(panels)
-        cv2.imshow("SmartEyes - 3 Thiet Bi", combined)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cv2.destroyAllWindows()
+    print("Server chay tai: https://192.168.62.197:5000")
+    print("Dien thoai 1: /phone?id=1")
+    print("Dien thoai 2: /phone?id=2")
+    print("Dien thoai 3: /phone?id=3")
+    print("Monitor:      /monitor")
+    threading.Timer(1.5, lambda: webbrowser.open("https://127.0.0.1:5000/monitor")).start()
+    app.run(host="0.0.0.0", port=5000, ssl_context='adhoc', use_reloader=False)
 
