@@ -28,6 +28,17 @@
             letter-spacing: 3px;
             text-shadow: 0 0 10px var(--neon-blue);
         }
+        .device-badge {
+            display: inline-block;
+            background: rgba(0, 229, 255, 0.15);
+            border: 1px solid var(--neon-blue);
+            border-radius: 20px;
+            padding: 4px 16px;
+            font-size: 13px;
+            color: var(--neon-blue);
+            letter-spacing: 2px;
+            margin-bottom: 12px;
+        }
         .glass-panel {
             background: var(--glass-bg);
             backdrop-filter: blur(10px);
@@ -94,20 +105,38 @@
 <body>
 
     <h2>SmartEyes UI</h2>
-    <button id="startBtn">Kích hoạt Camera</button>
+    <div class="device-badge" id="deviceBadge">THIET BI ...</div>
+    <button id="startBtn">Kich hoat Camera</button>
 
     <div class="glass-panel">
         <div id="videoContainer">
             <video id="videoElement" autoplay playsinline></video>
             <div id="videoOverlay"></div>
         </div>
-        <div id="alertBox">Đang chờ tín hiệu...</div>
+        <div id="alertBox">Dang cho tin hieu...</div>
     </div>
 
     <canvas id="canvas" style="display:none;"></canvas>
     <audio id="alertAudio"></audio>
 
     <script>
+        let deviceId = null;
+
+        async function initDevice() {
+            // Dung lai ID cu neu da dang ky truoc do
+            const saved = localStorage.getItem('smarteyes_device_id');
+            if (saved) {
+                deviceId = saved;
+            } else {
+                const res = await fetch('/register', { method: 'POST' });
+                const data = await res.json();
+                deviceId = data.device_id;
+                localStorage.setItem('smarteyes_device_id', deviceId);
+            }
+            document.getElementById('deviceBadge').textContent = 'THIET BI ' + deviceId;
+            document.title = 'SmartEyes - Thiet bi ' + deviceId;
+        }
+
         const video = document.getElementById('videoElement');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
@@ -116,6 +145,8 @@
 
         let lastTimestamp = 0;
         let isProcessing = false;
+
+        initDevice();
 
         document.getElementById('startBtn').addEventListener('click', async function() {
             this.style.display = 'none';
@@ -127,11 +158,10 @@
                 });
                 video.srcObject = stream;
             } catch (err) {
-                alertBox.innerText = "Lỗi mở camera: " + err.message;
+                alertBox.innerText = "Loi mo camera: " + err.message;
                 return;
             }
 
-            // Gắn file câm để cấp quyền audio vĩnh viễn
             alertAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
             alertAudio.play().catch(() => {});
 
@@ -152,7 +182,7 @@
                 const response = await fetch('/process_frame', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: imageData })
+                    body: JSON.stringify({ image: imageData, device_id: deviceId })
                 });
 
                 const data = await response.json();
@@ -161,12 +191,11 @@
                     lastTimestamp = data.timestamp;
                     alertBox.innerText = "⚠️ " + data.message;
 
-                    // Thêm tham số `?t=` để vượt qua Cache trình duyệt
                     alertAudio.src = `/audio/${data.label}?t=${data.timestamp}`;
-                    alertAudio.play().catch(e => console.error("Lỗi loa:", e));
+                    alertAudio.play().catch(e => console.error("Loi loa:", e));
                 }
             } catch (err) {
-                console.error("Lỗi mạng:", err);
+                console.error("Loi mang:", err);
             } finally {
                 isProcessing = false;
             }
