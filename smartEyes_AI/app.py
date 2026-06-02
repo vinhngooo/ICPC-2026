@@ -5,6 +5,7 @@ import os
 import base64
 import numpy as np
 import queue
+import torch
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from ultralytics import YOLO
@@ -12,14 +13,68 @@ from gtts import gTTS
 
 app = Flask(__name__)
 CORS(app)
-model = YOLO("yolov8n.pt")
+
+# Chỉ detect đúng class nguy hiểm, bỏ qua 70+ class thừa (chỉ áp dụng cho yolov8n)
+# door và stairs từ model phụ được merge sau nên không cần liệt kê ở đây
+DANGER_CLASS_IDS = [0, 1, 2, 3, 5, 7, 13, 15, 16, 56, 60]
+# person, bicycle, car, motorcycle, bus, truck, bench, cat, dog, chair, dining table
+
+class CombinedModel:
+    """Bọc nhiều model thành 1, gọi như YOLO bình thường."""
+    def __init__(self):
+        self._main = YOLO("yolov8n.pt")
+        self.names = dict(self._main.names)
+
+        # Thêm doors.pt nếu tồn tại
+        self._door = None
+        if os.path.exists("doors.pt"):
+            self._door = YOLO("doors.pt")
+            next_id = max(self.names.keys()) + 1
+            self.names[next_id] = "door"
+            self._door_id = next_id
+
+        # Thêm stairs.pt nếu tồn tại
+        self._stairs = None
+        if os.path.exists("stairs.pt"):
+            self._stairs = YOLO("stairs.pt")
+            next_id = max(self.names.keys()) + 1
+            self.names[next_id] = "stairs"
+            self._stairs_id = next_id
+
+    def __call__(self, frame, **kwargs):
+        results = self._main(frame, **kwargs)
+
+        if self._door is not None:
+            door_results = self._door(frame, verbose=False)
+            for box in door_results[0].boxes:
+                box.cls[:] = self._door_id
+                results[0].boxes = _merge_boxes(results[0].boxes, box)
+
+        if self._stairs is not None:
+            stairs_results = self._stairs(frame, verbose=False)
+            for box in stairs_results[0].boxes:
+                box.cls[:] = self._stairs_id
+                results[0].boxes = _merge_boxes(results[0].boxes, box)
+
+        return results
+
+def _merge_boxes(base, extra):
+    if base.data.shape[0] == 0:
+        return extra
+    base.data = torch.cat([base.data, extra.data], dim=0)
+    return base
+
+model = CombinedModel()
 
 VIET_LABELS = {
     "person": "người", "car": "xe hơi", "motorcycle": "xe máy",
     "bicycle": "xe đạp", "bus": "xe buýt", "truck": "xe tải",
-    "dog": "chó", "cat": "mèo"
+    "dog": "chó", "cat": "mèo", "bench": "ghế đá",
+    "chair": "ghế", "dining table": "cái bàn", "door": "cửa",
+    "stairs": "cầu thang",
 }
-DANGER = {"person", "car", "motorcycle", "bus", "truck", "desk", "bench"}
+DANGER = {"person", "car", "motorcycle", "bus", "truck", "bench",
+          "bicycle", "cat", "dog", "chair", "dining table", "door", "stairs"}
 
 MAX_DEVICES = 3
 COOLDOWN = 4
@@ -33,13 +88,79 @@ _next_id = 1
 def get_device_state(device_id):
     with device_lock:
         if device_id not in device_states:
-            device_states[device_id] = {
+            state = {
+                "infer_queue": queue.Queue(maxsize=1),
                 "frame_queue": queue.Queue(maxsize=1),
                 "latest_alert": {"message": "", "timestamp": 0, "label": ""},
                 "last_spoken": {},
                 "last_seen": {},
             }
+            device_states[device_id] = state
+            threading.Thread(target=inference_worker, args=(device_id,), daemon=True).start()
         return device_states[device_id]
+
+
+def inference_worker(device_id):
+    state = device_states[device_id]
+    while True:
+        frame = state["infer_queue"].get()
+
+        frame_height, frame_width = frame.shape[:2]
+        results = model(frame, classes=DANGER_CLASS_IDS, verbose=False)
+        now = time.time()
+
+        best_box = None
+        best_label = None
+        best_area = 0
+        current_labels = set()
+
+        for box in results[0].boxes:
+            cls_id = int(box.cls[0])
+            label = model.names[cls_id]
+            if label not in DANGER: continue
+            current_labels.add(label)
+            x1, y1, x2, y2 = box.xyxy[0]
+            area = (x2 - x1) * (y2 - y1)
+            if area > best_area:
+                best_area = area
+                best_box = box
+                best_label = label
+
+        last_seen = state["last_seen"]
+        last_spoken = state["last_spoken"]
+        latest_alert = state["latest_alert"]
+
+        for lbl in current_labels:
+            last_seen[lbl] = now
+        for lbl in list(last_spoken.keys()):
+            if now - last_seen.get(lbl, 0) > 2.0:
+                del last_spoken[lbl]
+
+        if best_box is not None:
+            if now - last_spoken.get(best_label, 0) > COOLDOWN:
+                direction = get_direction(best_box, frame_width)
+                distance = get_distance(best_box, frame_width, frame_height)
+                msg = build_message(best_label, direction, distance)
+                audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
+                threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
+                latest_alert["message"] = msg
+                latest_alert["timestamp"] = now
+                latest_alert["label"] = audio_key
+                last_spoken[best_label] = now
+                print(f"[Thiet bi {device_id}] {msg}")
+
+        annotated = results[0].plot()
+        h, w = annotated.shape[:2]
+        cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
+        cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
+        cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+
+        fq = state["frame_queue"]
+        if fq.full():
+            try: fq.get_nowait()
+            except queue.Empty: pass
+        fq.put(annotated)
 
 def get_direction(box, frame_width):
     x1, y1, x2, y2 = box.xyxy[0]
@@ -81,67 +202,13 @@ def process_frame():
     nparr = np.frombuffer(img_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    frame_height, frame_width = frame.shape[:2]
-    results = model(frame, verbose=False)
-    now = time.time()
+    infer_q = state["infer_queue"]
+    if infer_q.full():
+        try: infer_q.get_nowait()
+        except queue.Empty: pass
+    infer_q.put(frame)
 
-    best_box = None
-    best_label = None
-    best_area = 0
-    current_labels = set()
-
-    for box in results[0].boxes:
-        cls_id = int(box.cls[0])
-        label = model.names[cls_id]
-        if label not in DANGER: continue
-        current_labels.add(label)
-        x1, y1, x2, y2 = box.xyxy[0]
-        area = (x2 - x1) * (y2 - y1)
-        if area > best_area:
-            best_area = area
-            best_box = box
-            best_label = label
-
-    last_seen = state["last_seen"]
-    last_spoken = state["last_spoken"]
-    latest_alert = state["latest_alert"]
-
-    for lbl in current_labels:
-        last_seen[lbl] = now
-    for lbl in list(last_spoken.keys()):
-        if now - last_seen.get(lbl, 0) > 2.0:
-            del last_spoken[lbl]
-
-    if best_box is not None:
-        if now - last_spoken.get(best_label, 0) > COOLDOWN:
-            direction = get_direction(best_box, frame_width)
-            distance = get_distance(best_box, frame_width, frame_height)
-            msg = build_message(best_label, direction, distance)
-            audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
-            threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
-            latest_alert["message"] = msg
-            latest_alert["timestamp"] = now
-            latest_alert["label"] = audio_key
-            last_spoken[best_label] = now
-            print(f"[Thiết bị {device_id}] 🔊 {msg}")
-
-    annotated = results[0].plot()
-    h, w = annotated.shape[:2]
-    cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
-    cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
-    # Nhãn thiết bị lên góc trái
-    cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-
-    fq = state["frame_queue"]
-    if not fq.full():
-        try:
-            fq.get_nowait()
-        except queue.Empty:
-            pass
-    fq.put(annotated)
-
-    return jsonify(latest_alert)
+    return jsonify(state["latest_alert"])
 
 @app.route("/audio/<path:key>")
 def get_audio(key):
