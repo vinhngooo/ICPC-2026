@@ -21,14 +21,25 @@ VIET_LABELS = {
 }
 DANGER = {"person", "car", "motorcycle", "bus", "truck", "desk", "bench"}
 
-latest_alert = {"message": "", "timestamp": 0, "label": ""}
-last_spoken = {}
-last_seen = {}
+MAX_DEVICES = 3
 COOLDOWN = 4
 
-frame_queue = queue.Queue(maxsize=1)
-
 os.makedirs("audio", exist_ok=True)
+
+device_states = {}
+device_lock = threading.Lock()
+_next_id = 1
+
+def get_device_state(device_id):
+    with device_lock:
+        if device_id not in device_states:
+            device_states[device_id] = {
+                "frame_queue": queue.Queue(maxsize=1),
+                "latest_alert": {"message": "", "timestamp": 0, "label": ""},
+                "last_spoken": {},
+                "last_seen": {},
+            }
+        return device_states[device_id]
 
 def get_direction(box, frame_width):
     x1, y1, x2, y2 = box.xyxy[0]
@@ -59,12 +70,13 @@ def generate_audio(key, text):
 
 @app.route("/process_frame", methods=["POST"])
 def process_frame():
-    global latest_alert
     data = request.json
     if not data or 'image' not in data:
         return jsonify({"error": "No image"}), 400
 
-    # Giải mã hình ảnh từ trình duyệt gửi lên
+    device_id = str(data.get("device_id", "1"))
+    state = get_device_state(device_id)
+
     img_data = base64.b64decode(data['image'].split(',')[1])
     nparr = np.frombuffer(img_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -82,50 +94,53 @@ def process_frame():
         cls_id = int(box.cls[0])
         label = model.names[cls_id]
         if label not in DANGER: continue
-
+        current_labels.add(label)
         x1, y1, x2, y2 = box.xyxy[0]
         area = (x2 - x1) * (y2 - y1)
         if area > best_area:
             best_area = area
             best_box = box
             best_label = label
+
+    last_seen = state["last_seen"]
+    last_spoken = state["last_spoken"]
+    latest_alert = state["latest_alert"]
+
     for lbl in current_labels:
         last_seen[lbl] = now
-
     for lbl in list(last_spoken.keys()):
         if now - last_seen.get(lbl, 0) > 2.0:
-            del last_spoken[lbl] 
+            del last_spoken[lbl]
 
     if best_box is not None:
         if now - last_spoken.get(best_label, 0) > COOLDOWN:
             direction = get_direction(best_box, frame_width)
             distance = get_distance(best_box, frame_width, frame_height)
             msg = build_message(best_label, direction, distance)
-
             audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
             threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
-
             latest_alert["message"] = msg
             latest_alert["timestamp"] = now
             latest_alert["label"] = audio_key
             last_spoken[best_label] = now
-            print(f"🔊 {msg}")
+            print(f"[Thiết bị {device_id}] 🔊 {msg}")
 
-    # Lấy ảnh có khung YOLO vẽ sẵn
     annotated = results[0].plot()
     h, w = annotated.shape[:2]
     cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
     cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
+    # Nhãn thiết bị lên góc trái
+    cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
 
-    # Đưa ảnh đã vẽ vào hàng đợi hiển thị 
-    if not frame_queue.full():
-                try:
-            frame_queue.get_nowait()
+    fq = state["frame_queue"]
+    if not fq.full():
+        try:
+            fq.get_nowait()
         except queue.Empty:
             pass
+    fq.put(annotated)
 
-    frame_queue.put(annotated)
-    
     return jsonify(latest_alert)
 
 @app.route("/audio/<path:key>")
@@ -137,32 +152,77 @@ def get_audio(key):
         time.sleep(0.1)
     return "", 404
 
+@app.route("/")
+def index():
+    from flask import redirect
+    return redirect("/phone")
+
+@app.route("/register", methods=["POST"])
+def register():
+    global _next_id
+    with device_lock:
+        assigned = str(_next_id)
+        _next_id = (_next_id % MAX_DEVICES) + 1
+    get_device_state(assigned)
+    return jsonify({"device_id": assigned})
+
 @app.route("/phone")
 def phone():
-    return send_from_directory(".", "templates/smarteyes_ui.html")
+    return send_from_directory("templates", "index.html")
 
-# Luồng chạy Server Flask riêng biệt
+@app.route("/monitor")
+def monitor():
+    return send_from_directory("templates", "monitor.html")
+
+@app.route("/alert_state")
+def alert_state():
+    device_id = str(request.args.get("device_id", "1"))
+    state = get_device_state(device_id)
+    return jsonify(state["latest_alert"])
+
 def start_flask():
     app.run(host="0.0.0.0", port=5000, ssl_context='adhoc', use_reloader=False)
 
+# Ảnh placeholder màu tối khi chưa có thiết bị nào gửi frame
+PLACEHOLDER_H, PLACEHOLDER_W = 240, 320
+
+def make_placeholder(device_id):
+    img = np.zeros((PLACEHOLDER_H, PLACEHOLDER_W, 3), dtype=np.uint8)
+    cv2.putText(img, f"Thiet bi {device_id}", (20, PLACEHOLDER_H // 2 - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
+    cv2.putText(img, "Chua ket noi", (20, PLACEHOLDER_H // 2 + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 80), 1)
+    return img
+
 if __name__ == "__main__":
-    # Khởi chạy Flask chạy ngầm
     threading.Thread(target=start_flask, daemon=True).start()
     print("🚀 Server Flask đang chạy ngầm...")
+    print("📱 Điện thoại 1: /phone?id=1")
+    print("📱 Điện thoại 2: /phone?id=2")
+    print("📱 Điện thoại 3: /phone?id=3")
 
-    # Hiển thị OpenCV
+    TARGET_H = 360
+
     while True:
-        try:
-            # Chờ nhận hình ảnh từ Flask gửi sang (chờ tối đa 0.1s)
-            frame_to_show = frame_queue.get(timeout=0.1)
-            cv2.imshow("SmartEyes - Live Monitor", frame_to_show)
-        except queue.Empty:
-            pass
-            
+        panels = []
+        for did in ["1", "2", "3"]:
+            state = get_device_state(did)
+            try:
+                frame = state["frame_queue"].get_nowait()
+            except queue.Empty:
+                frame = make_placeholder(did)
+
+            # Resize giữ tỉ lệ chiều cao cố định
+            h, w = frame.shape[:2]
+            new_w = int(w * TARGET_H / h)
+            frame = cv2.resize(frame, (new_w, TARGET_H))
+            panels.append(frame)
+
+        combined = np.hstack(panels)
+        cv2.imshow("SmartEyes - 3 Thiet Bi", combined)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cv2.destroyAllWindows()
 
-# run cmd to open : ngrok http https://localhost:5000
-# run link on phone :  https://unwind-quit-detest.ngrok-free.dev/phone
