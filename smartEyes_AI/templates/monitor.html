@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartEyes - Monitor 3 Thiet Bi</title>
+    <style>
+        :root {
+            --neon-green: #00ff9d;
+            --neon-blue: #00e5ff;
+            --neon-red: #ff2a6d;
+            --bg: #0a0a14;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            padding: 16px;
+        }
+        header {
+            text-align: center;
+            padding: 12px 0 20px;
+            letter-spacing: 4px;
+            font-size: 18px;
+            color: var(--neon-blue);
+            text-shadow: 0 0 10px var(--neon-blue);
+            text-transform: uppercase;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+        }
+        @media (max-width: 700px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+        .card {
+            background: rgba(16, 20, 30, 0.85);
+            border: 1px solid rgba(0, 229, 255, 0.25);
+            border-radius: 14px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 0 14px rgba(0, 229, 255, 0.07);
+        }
+        .card-title {
+            font-size: 13px;
+            letter-spacing: 2px;
+            color: var(--neon-blue);
+            text-transform: uppercase;
+            border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+            padding-bottom: 8px;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 9px; height: 9px;
+            border-radius: 50%;
+            background: #555;
+            margin-right: 6px;
+            transition: background 0.4s;
+        }
+        .status-dot.active { background: var(--neon-green); box-shadow: 0 0 6px var(--neon-green); }
+        .alert-text {
+            font-size: 15px;
+            font-weight: bold;
+            color: var(--neon-red);
+            text-shadow: 0 0 6px var(--neon-red);
+            min-height: 48px;
+            line-height: 1.5;
+        }
+        .alert-text.idle { color: #555; text-shadow: none; font-weight: normal; }
+        .time-label {
+            font-size: 11px;
+            color: #444;
+            letter-spacing: 1px;
+        }
+        footer {
+            text-align: center;
+            margin-top: 24px;
+            color: #333;
+            font-size: 12px;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <header>SmartEyes &mdash; Giam Sat 3 Thiet Bi</header>
+
+    <div class="grid" id="grid"></div>
+
+    <footer>Auto-refresh &bull; SmartEyes AI</footer>
+
+    <script>
+        const DEVICES = ['1', '2', '3'];
+        const POLL_MS = 800;
+
+        // Build cards
+        const grid = document.getElementById('grid');
+        const cards = {};
+
+        DEVICES.forEach(id => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <div class="card-title">
+                    <span class="status-dot" id="dot-${id}"></span>
+                    Thiet bi ${id}
+                </div>
+                <div class="alert-text idle" id="alert-${id}">Chua co tin hieu...</div>
+                <div class="time-label" id="time-${id}">--:--:--</div>
+            `;
+            grid.appendChild(card);
+            cards[id] = {
+                dot: card.querySelector(`#dot-${id}`),
+                alert: card.querySelector(`#alert-${id}`),
+                time: card.querySelector(`#time-${id}`),
+                lastTs: 0,
+                idleTimer: null,
+            };
+        });
+
+        async function pollDevice(id) {
+            try {
+                const res = await fetch(`/alert_state?device_id=${id}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const c = cards[id];
+
+                if (data.timestamp > 0) {
+                    c.dot.classList.add('active');
+                }
+
+                if (data.timestamp > c.lastTs && data.label !== '') {
+                    c.lastTs = data.timestamp;
+                    c.alert.textContent = '⚠️ ' + data.message;
+                    c.alert.classList.remove('idle');
+                    const d = new Date(data.timestamp * 1000);
+                    c.time.textContent = d.toLocaleTimeString('vi-VN');
+
+                    clearTimeout(c.idleTimer);
+                    c.idleTimer = setTimeout(() => {
+                        c.alert.textContent = 'Dang quan sat...';
+                        c.alert.classList.add('idle');
+                    }, 6000);
+                }
+            } catch (_) {}
+        }
+
+        DEVICES.forEach(id => {
+            setInterval(() => pollDevice(id), POLL_MS);
+            pollDevice(id);
+        });
+    </script>
+</body>
+</html>
