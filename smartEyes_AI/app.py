@@ -7,11 +7,13 @@ import os
 import base64
 import numpy as np
 import queue
+import asyncio
 import torch
+import edge_tts
+from collections import deque
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from ultralytics import YOLO
-from gtts import gTTS
 
 app = Flask(__name__)
 CORS(app)
@@ -84,7 +86,11 @@ DANGER = {"person", "car", "motorcycle", "bus", "truck", "bench",
 MAX_DEVICES = 3
 COOLDOWN = 6
 
-os.makedirs("audio", exist_ok=True)
+APPROACH_RATIO    = 1.25  # diện tích tăng >25% so với frame cũ nhất trong window
+APPROACH_COOLDOWN = 3     # cooldown riêng cho cảnh báo tiếp cận (ngắn hơn COOLDOWN)
+TRACK_WINDOW      = 4     # số frame giữ lại để so sánh
+
+os.makedirs("audio", exist_ok=True)  # fallback khi import module trực tiếp
 
 device_states = {}
 device_lock = threading.Lock()
@@ -98,6 +104,8 @@ def get_device_state(device_id):
                 "latest_alert": {"message": "", "timestamp": 0, "label": ""},
                 "last_spoken": {},
                 "last_seen": {},
+                "area_history": {},        # label -> deque(maxlen=TRACK_WINDOW)
+                "last_approach_spoken": {},
                 "latest_frame": None,
                 "frame_lock": threading.Lock(),
             }
@@ -139,9 +147,11 @@ def _do_inference(device_id, state, frame):
             best_box = box
             best_label = label
 
-    last_seen = state["last_seen"]
-    last_spoken = state["last_spoken"]
-    latest_alert = state["latest_alert"]
+    last_seen            = state["last_seen"]
+    last_spoken          = state["last_spoken"]
+    last_approach_spoken = state["last_approach_spoken"]
+    area_history         = state["area_history"]
+    latest_alert         = state["latest_alert"]
 
     for lbl in current_labels:
         last_seen[lbl] = now
@@ -150,8 +160,33 @@ def _do_inference(device_id, state, frame):
             del last_spoken[lbl]
 
     if best_box is not None:
-        if now - last_spoken.get(best_label, 0) > COOLDOWN:
-            direction = get_direction(best_box, frame_width)
+        # --- Cập nhật lịch sử diện tích ---
+        if best_label not in area_history:
+            area_history[best_label] = deque(maxlen=TRACK_WINDOW)
+        area_history[best_label].append(float(best_area))
+
+        # --- Kiểm tra vật thể đang tiến lại gần ---
+        hist = area_history[best_label]
+        is_approaching = (
+            len(hist) == TRACK_WINDOW
+            and hist[-1] > hist[0] * APPROACH_RATIO   # tổng thể tăng >25%
+            and hist[-1] > hist[-2]                    # vẫn đang tăng ở frame này
+        )
+
+        direction = get_direction(best_box, frame_width)
+
+        if is_approaching and now - last_approach_spoken.get(best_label, 0) > APPROACH_COOLDOWN:
+            msg = build_approach_message(best_label, direction)
+            audio_key = f"approach_{best_label}_{direction.replace(' ', '_')}"
+            threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
+            latest_alert["message"] = msg
+            latest_alert["timestamp"] = now
+            latest_alert["label"] = audio_key
+            last_approach_spoken[best_label] = now
+            last_spoken[best_label] = now  # đặt lại cooldown thường để không alert 2 lần
+            print(f"[TIEP CAN device {device_id}] {msg}")
+
+        elif now - last_spoken.get(best_label, 0) > COOLDOWN:
             distance = get_distance(best_box, frame_width, frame_height)
             msg = build_message(best_label, direction, distance)
             audio_key = f"{best_label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
@@ -195,10 +230,46 @@ def build_message(label, direction, distance):
     if distance: return f"Có {name} {distance} {direction}, chú ý!"
     else: return f"Có {name} {direction}"
 
-def generate_audio(key, text):
+def build_approach_message(label, direction):
+    name = VIET_LABELS.get(label, label)
+    return f"Cẩn thận! {name} đang tiến lại {direction}!"
+
+VOICE = "vi-VN-HoaiMyNeural"
+RATE  = "+15%"
+
+async def _gen_audio_async(key: str, text: str):
     path = f"audio/{key}.mp3"
     if not os.path.exists(path):
-        gTTS(text=text, lang="vi").save(path)
+        await edge_tts.Communicate(text, VOICE, rate=RATE).save(path)
+
+def generate_audio(key: str, text: str):
+    asyncio.run(_gen_audio_async(key, text))
+
+def pregenerate_audio():
+    directions = ["bên trái", "bên phải", "phía trước"]
+    distances  = ["rất gần", "gần", ""]
+
+    async def _run():
+        tasks = [
+            _gen_audio_async(
+                f"{label}_{direction.replace(' ','_')}_{distance.replace(' ','_')}",
+                build_message(label, direction, distance)
+            )
+            for label in VIET_LABELS
+            for direction in directions
+            for distance in distances
+        ] + [
+            _gen_audio_async(
+                f"approach_{label}_{direction.replace(' ','_')}",
+                build_approach_message(label, direction)
+            )
+            for label in VIET_LABELS
+            for direction in directions
+        ]
+        await asyncio.gather(*tasks)
+        print(f"[Audio] Pre-generated {len(tasks)} clips xong.")
+
+    asyncio.run(_run())
 
 @app.route("/process_frame", methods=["POST"])
 def process_frame():
@@ -280,6 +351,11 @@ def make_placeholder(device_id):
     return img
 
 if __name__ == "__main__":
+    import shutil
+    shutil.rmtree("audio", ignore_errors=True)
+    os.makedirs("audio", exist_ok=True)
+    print("[Audio] Dang tao truoc tat ca audio clips (edge-tts)...")
+    pregenerate_audio()
     print("Server chay tai: https://192.168.62.197:5000")
     print("Dien thoai 1: /phone?id=1")
     print("Dien thoai 2: /phone?id=2")
