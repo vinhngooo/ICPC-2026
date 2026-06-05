@@ -1,19 +1,24 @@
 import cv2
 import io
+import json
 import time
 import webbrowser
 import threading
 import os
 import base64
+import hashlib
 import numpy as np
 import queue
 import asyncio
 import torch
+import tempfile
+import requests as http_requests
 import edge_tts
 from collections import deque
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from ultralytics import YOLO
+from faster_whisper import WhisperModel
 
 app = Flask(__name__)
 CORS(app)
@@ -67,6 +72,8 @@ def _merge_boxes(base, extra):
     return base
 
 model = CombinedModel()
+INFER_DEVICE = 0 if torch.cuda.is_available() else "cpu"
+print(f"[Model] Device: {'GPU (CUDA)' if INFER_DEVICE == 0 else 'CPU'}")
 
 VIET_LABELS = {
     "person": "người", "car": "xe hơi", "motorcycle": "xe máy",
@@ -97,6 +104,20 @@ FOCAL_LENGTH_PX = 600
 
 DISTANCES = ["dưới 1 mét", "khoảng 1 mét", "khoảng 2 mét", ""]
 
+# Navigation mode
+NAV_COOLDOWN         = 2.5   # giây giữa 2 hướng dẫn liên tiếp
+NAV_REPEAT_COOLDOWN  = 5.0   # giây trước khi lặp lại cùng một thông điệp
+NAV_DANGER_THRESHOLD = 3.0   # tổng điểm nguy hiểm của 1 vùng
+
+NAV_MESSAGES = {
+    "nav_straight":   "Tiếp tục đi thẳng",
+    "nav_turn_left":  "Có vật cản phía trước, hãy rẽ trái",
+    "nav_turn_right": "Có vật cản phía trước, hãy rẽ phải",
+    "nav_blocked":    "Dừng lại! Tất cả hướng đều có vật cản",
+    "nav_start":      "Bật chế độ dẫn đường",
+    "nav_stop_mode":  "Tắt chế độ dẫn đường",
+}
+
 MAX_DEVICES = 3
 COOLDOWN = 6
 
@@ -105,6 +126,85 @@ APPROACH_COOLDOWN = 3
 TRACK_WINDOW      = 4
 
 os.makedirs("audio", exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Whisper (nhận dạng giọng nói local)
+# ---------------------------------------------------------------------------
+
+print("[Whisper] Đang tải model small...")
+whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+print("[Whisper] Sẵn sàng.")
+
+# ---------------------------------------------------------------------------
+# Ollama / AI Vision
+# ---------------------------------------------------------------------------
+
+OLLAMA_URL   = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "qwen2.5vl:7b"
+
+def _resize_image_b64(image_b64: str, max_side: int = 512) -> str:
+    raw = base64.b64decode(image_b64)
+    arr = np.frombuffer(raw, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    if max(h, w) > max_side:
+        scale = max_side / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return base64.b64encode(buf.tobytes()).decode()
+
+def query_ai(image_b64: str, user_text: str) -> str:
+    """Stream LLM response and return full text."""
+    if ',' in image_b64:
+        image_b64 = image_b64.split(',')[1]
+    image_b64 = _resize_image_b64(image_b64)
+    prompt = (
+        f"You are a vision assistant for a blind person. "
+        f"Look at the image and answer the question in Vietnamese. "
+        f"Reply in exactly 1-2 short sentences. No lists, no explanations. "
+        f"Question: {user_text}"
+    )
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "user", "content": prompt, "images": [image_b64]},
+        ],
+        "stream": True,
+        "options": {"temperature": 0.1, "num_predict": 100},
+    }
+    resp = http_requests.post(OLLAMA_URL, json=payload, stream=True, timeout=90)
+    resp.raise_for_status()
+
+    full_text = ""
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except Exception:
+            continue
+        full_text += chunk.get("message", {}).get("content", "")
+        if chunk.get("done"):
+            break
+
+    return full_text.strip()
+
+async def _tts_to_bytes(text: str, key: str) -> bytes:
+    path = f"audio/{key}.mp3"
+    if not os.path.exists(path):
+        await edge_tts.Communicate(text, VOICE, rate=RATE).save(path)
+    with open(path, "rb") as f:
+        return f.read()
+
+def tts_sync(text: str, key: str) -> str:
+    """Generate TTS synchronously and return base64-encoded mp3."""
+    future = asyncio.run_coroutine_threadsafe(_tts_to_bytes(text, key), _audio_loop)
+    try:
+        audio_bytes = future.result(timeout=20)
+        return base64.b64encode(audio_bytes).decode()
+    except Exception as e:
+        print(f"[TTS Error] {e}")
+        return ""
 
 # ---------------------------------------------------------------------------
 # Simple IoU tracker (không cần thư viện ngoài)
@@ -198,6 +298,8 @@ def get_device_state(device_id):
                 "latest_frame":         None,
                 "frame_lock":           threading.Lock(),
                 "tracker":              SimpleTracker(),
+                "mode":                 "yolo",
+                "latest_frame_b64":     None,
             }
             device_states[device_id] = state
             threading.Thread(target=inference_worker, args=(device_id,), daemon=True).start()
@@ -215,9 +317,11 @@ def inference_worker(device_id):
             print(f"[ERROR device {device_id}] {e}")
             traceback.print_exc()
 
+MONITOR_TIMEOUT = 5  # giây — sau khoảng này coi monitor offline, bỏ qua plot
+
 def _do_inference(device_id, state, frame):
     frame_width = frame.shape[1]
-    results = model(frame, classes=DANGER_CLASS_IDS, verbose=False)
+    results = model(frame, classes=DANGER_CLASS_IDS, verbose=False, device=INFER_DEVICE)
     now = time.time()
 
     # Thu thập tất cả detection nguy hiểm
@@ -283,8 +387,12 @@ def _do_inference(device_id, state, frame):
             approach_fired = True
             break
 
+    # --- Dẫn đường liên tục (nav mode) hoặc cảnh báo đa vật thể ---
+    if not approach_fired and state.get("nav_mode", False):
+        _nav_guidance(device_id, state, tracked, frame_width, now)
+
     # --- Cảnh báo đa vật thể (tối đa 2 object hết cooldown) ---
-    if not approach_fired:
+    if not approach_fired and not state.get("nav_mode", False):
         due_objects = []
         for det in tracked:
             x1, y1, x2, y2, label, _, tid = det
@@ -308,16 +416,75 @@ def _do_inference(device_id, state, frame):
                 last_spoken[label] = now
             print(f"[Thiet bi {device_id}] {msg}")
 
-    annotated = results[0].plot()
-    h, w = annotated.shape[:2]
-    cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
-    cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
-    cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+    # Chỉ vẽ annotation khi monitor đang xem — tiết kiệm CPU
+    monitor_active = time.time() - state.get("last_monitor_poll", 0) < MONITOR_TIMEOUT
+    if monitor_active:
+        annotated = results[0].plot()
+        h, w = annotated.shape[:2]
+        cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
+        cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
+        cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+        _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        with state["frame_lock"]:
+            state["latest_frame"] = buf.tobytes()
 
-    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    with state["frame_lock"]:
-        state["latest_frame"] = buf.tobytes()
+def _score_zone(tracked, x_min, x_max):
+    """Tính điểm nguy hiểm của một vùng ngang (dựa vào tâm bounding box)."""
+    score = 0.0
+    for det in tracked:
+        x1, y1, x2, y2, label, *_ = det
+        cx = (x1 + x2) / 2
+        if cx < x_min or cx >= x_max:
+            continue
+        box_h = y2 - y1
+        real_h = KNOWN_HEIGHTS_CM.get(label, 150)
+        dist_cm = (real_h * FOCAL_LENGTH_PX) / box_h if box_h >= 10 else 999
+        if dist_cm < 100:   dist_w = 10
+        elif dist_cm < 200: dist_w = 5
+        elif dist_cm < 300: dist_w = 2
+        else:               dist_w = 0.5
+        score += PRIORITY.get(label, 1) * dist_w
+    return score
+
+def _nav_guidance(device_id, state, tracked, frame_width, now):
+    """Phát hướng dẫn đi đường liên tục khi nav_mode bật."""
+    if not state.get("nav_mode", False):
+        return
+    if now - state.get("last_nav_spoken", 0) < NAV_COOLDOWN:
+        return
+
+    w3 = frame_width / 3
+    left_score   = _score_zone(tracked, 0,       w3)
+    center_score = _score_zone(tracked, w3,       2 * w3)
+    right_score  = _score_zone(tracked, 2 * w3,  frame_width)
+
+    center_clear = center_score < NAV_DANGER_THRESHOLD
+    left_clear   = left_score   < NAV_DANGER_THRESHOLD
+    right_clear  = right_score  < NAV_DANGER_THRESHOLD
+
+    if center_clear:
+        key = "nav_straight"
+    elif left_clear and right_clear:
+        key = "nav_turn_left" if left_score <= right_score else "nav_turn_right"
+    elif left_clear:
+        key = "nav_turn_left"
+    elif right_clear:
+        key = "nav_turn_right"
+    else:
+        key = "nav_blocked"
+
+    msg = NAV_MESSAGES[key]
+    # Lặp lại cùng thông điệp chỉ sau NAV_REPEAT_COOLDOWN
+    if msg == state.get("last_nav_message", "") and \
+       now - state.get("last_nav_spoken", 0) < NAV_REPEAT_COOLDOWN:
+        return
+
+    generate_audio(key, msg)
+    state["latest_alert"].update({"message": msg, "timestamp": now, "label": key})
+    state["last_nav_spoken"]  = now
+    state["last_nav_message"] = msg
+    print(f"[NAV device {device_id}] {msg}")
 
 def get_direction(x1, x2, frame_width):
     ratio = ((x1 + x2) / 2) / frame_width
@@ -407,7 +574,7 @@ def pregenerate_audio():
     directions = ["bên trái", "bên phải", "phía trước"]
 
     async def _run():
-        sem = asyncio.Semaphore(5)  # tối đa 5 request đồng thời đến TTS service
+        sem = asyncio.Semaphore(5)
         tasks = [
             _gen_audio_async(
                 f"{label}_{direction.replace(' ','_')}_{distance.replace(' ','_')}",
@@ -425,6 +592,9 @@ def pregenerate_audio():
             )
             for label in VIET_LABELS
             for direction in directions
+        ] + [
+            _gen_audio_async(key, text, sem)
+            for key, text in NAV_MESSAGES.items()
         ]
         await asyncio.gather(*tasks)
         print(f"[Audio] Pre-generated {len(tasks)} clips xong.")
@@ -439,6 +609,12 @@ def process_frame():
 
     device_id = str(data.get("device_id", "1"))
     state = get_device_state(device_id)
+
+    # Luôn lưu frame mới nhất (dùng cho AI query và monitor)
+    state["latest_frame_b64"] = data['image']
+
+    if state.get("mode") == "ai":
+        return jsonify(state["latest_alert"])
 
     img_data = base64.b64decode(data['image'].split(',')[1])
     nparr = np.frombuffer(img_data, np.uint8)
@@ -455,7 +631,7 @@ def process_frame():
 @app.route("/audio/<path:key>")
 def get_audio(key):
     path = f"audio/{key}.mp3"
-    for _ in range(20):
+    for _ in range(80):
         if os.path.exists(path):
             return send_file(path, mimetype="audio/mpeg")
         time.sleep(0.1)
@@ -483,15 +659,83 @@ def phone():
 def monitor():
     return send_from_directory("templates", "monitor.html")
 
+@app.route("/nav_mode/<device_id>", methods=["GET"])
+def get_nav_mode(device_id):
+    state = get_device_state(device_id)
+    return jsonify({"nav_mode": state.get("nav_mode", False)})
+
+@app.route("/nav_mode/<device_id>", methods=["POST"])
+def toggle_nav_mode(device_id):
+    state = get_device_state(device_id)
+    state["nav_mode"] = not state.get("nav_mode", False)
+    is_on = state["nav_mode"]
+    key = "nav_start" if is_on else "nav_stop_mode"
+    msg = NAV_MESSAGES[key]
+    generate_audio(key, msg)
+    state["latest_alert"].update({"message": msg, "timestamp": time.time(), "label": key})
+    return jsonify({"nav_mode": is_on})
+
 @app.route("/alert_state")
 def alert_state():
     device_id = str(request.args.get("device_id", "1"))
     state = get_device_state(device_id)
     return jsonify(state["latest_alert"])
 
+@app.route("/mode/<device_id>", methods=["POST"])
+def set_mode(device_id):
+    state = get_device_state(device_id)
+    new_mode = (request.json or {}).get("mode", "yolo")
+    if new_mode not in ("yolo", "ai"):
+        return jsonify({"error": "Invalid mode"}), 400
+    state["mode"] = new_mode
+    return jsonify({"mode": new_mode})
+
+@app.route("/ai_query", methods=["POST"])
+def ai_query():
+    data = request.json or {}
+    device_id = str(data.get("device_id", "1"))
+    user_text  = data.get("query", "").strip()
+    if not user_text:
+        return jsonify({"error": "No query"}), 400
+
+    state = get_device_state(device_id)
+    image_b64 = data.get("image") or state.get("latest_frame_b64")
+    if not image_b64:
+        return jsonify({"error": "Chưa có hình ảnh từ camera"}), 400
+
+    try:
+        response_text = query_ai(image_b64, user_text)
+    except http_requests.exceptions.ConnectionError:
+        return jsonify({"error": "Không kết nối được Ollama. Hãy chạy: ollama serve"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    tts_key   = "ai_" + hashlib.md5(response_text.encode()).hexdigest()[:8]
+    audio_b64 = tts_sync(response_text, tts_key)
+
+    now = time.time()
+    state["latest_alert"].update({"message": response_text, "timestamp": now, "label": tts_key})
+    return jsonify({"response": response_text, "audio_b64": audio_b64, "timestamp": now})
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    audio_file = request.files.get("audio")
+    if not audio_file:
+        return jsonify({"error": "No audio"}), 400
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+        audio_file.save(f.name)
+        tmp_path = f.name
+    try:
+        segments, _ = whisper_model.transcribe(tmp_path, language="vi")
+        text = " ".join(s.text for s in segments).strip()
+        return jsonify({"text": text})
+    finally:
+        os.unlink(tmp_path)
+
 @app.route("/frame/<device_id>")
 def get_frame(device_id):
     state = get_device_state(device_id)
+    state["last_monitor_poll"] = time.time()
     with state["frame_lock"]:
         data = state["latest_frame"]
     if data is None:
