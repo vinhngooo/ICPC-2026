@@ -3,132 +3,291 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartEyes - Monitor 3 Thiet Bi</title>
+    <title>SmartEyes — Monitor</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
         :root {
-            --neon-green: #00ff9d;
-            --neon-blue: #00e5ff;
-            --neon-red: #ff2a6d;
-            --bg: #0a0a14;
+            --bg:          #04080f;
+            --surface:     rgba(10, 30, 70, 0.55);
+            --surface-hi:  rgba(14, 40, 90, 0.70);
+            --border:      rgba(59, 130, 246, 0.14);
+            --border-hi:   rgba(59, 130, 246, 0.28);
+            --accent:      #3b82f6;
+            --green:       #34D399;
+            --green-soft:  rgba(52, 211, 153, 0.13);
+            --red:         #F87171;
+            --red-soft:    rgba(248, 113, 113, 0.10);
+            --navy-soft:   rgba(59, 130, 246, 0.12);
+            --text:        #e2e8f0;
+            --text-sub:    #94a3b8;
+            --text-muted:  #3d5a80;
+            --glass:       blur(20px) saturate(150%);
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background: var(--bg);
-            color: white;
-            font-family: 'Segoe UI', sans-serif;
+
+        html, body {
             min-height: 100vh;
-            padding: 16px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+            -webkit-font-smoothing: antialiased;
         }
-        header {
-            text-align: center;
-            padding: 12px 0 20px;
-            letter-spacing: 4px;
-            font-size: 18px;
-            color: var(--neon-blue);
-            text-shadow: 0 0 10px var(--neon-blue);
-            text-transform: uppercase;
+
+        /* ── Subtle radial bg glow ── */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -20%; left: 50%;
+            transform: translateX(-50%);
+            width: 80vw; height: 50vh;
+            background: radial-gradient(ellipse, rgba(29,78,216,0.12) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
         }
+
+        /* ── Header ── */
+        .header {
+            position: sticky; top: 0; z-index: 30;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 24px;
+            height: 58px;
+            background: rgba(4, 8, 20, 0.92);
+            backdrop-filter: var(--glass);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; }
+
+        .logo-mark {
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 60%, #60a5fa 100%);
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+            box-shadow: 0 3px 12px rgba(59,130,246,0.38);
+        }
+
+        .logo-name {
+            font-size: 15px; font-weight: 700; letter-spacing: -0.3px;
+            background: linear-gradient(120deg, #fff 40%, #93c5fd);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        .header-right { display: flex; align-items: center; gap: 10px; }
+
+        .badge {
+            background: rgba(10,30,70,0.6);
+            border: 1px solid var(--border);
+            border-radius: 20px; padding: 4px 12px;
+            font-size: 11px; color: var(--text-muted);
+            font-weight: 500; letter-spacing: 0.3px;
+            backdrop-filter: blur(8px);
+        }
+
+        .online-pill {
+            display: flex; align-items: center; gap: 5px;
+            background: rgba(10,30,70,0.6);
+            border: 1px solid var(--border);
+            border-radius: 20px; padding: 4px 12px;
+            font-size: 11px; color: var(--text-muted);
+            backdrop-filter: blur(8px);
+        }
+        .online-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 5px var(--green);
+            animation: blink 2.4s ease-in-out infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+        /* ── Grid ── */
+        .wrap { position: relative; z-index: 1; padding: 20px 20px 32px; }
+
         .grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 14px;
+            gap: 16px;
         }
-        @media (max-width: 700px) {
-            .grid { grid-template-columns: 1fr; }
-        }
+        @media (max-width: 900px) { .grid { grid-template-columns: repeat(2,1fr); } }
+        @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+        /* ── Device card ── */
         .card {
-            background: rgba(16, 20, 30, 0.85);
-            border: 1px solid rgba(0, 229, 255, 0.25);
-            border-radius: 14px;
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            box-shadow: 0 0 14px rgba(0, 229, 255, 0.07);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            overflow: hidden;
+            display: flex; flex-direction: column;
+            backdrop-filter: blur(14px);
+            transition: border-color 0.3s;
         }
-        .cam-feed {
-            width: 100%;
-            border-radius: 8px;
-            border: 1px solid rgba(0, 255, 157, 0.3);
-            background: #000;
-            display: block;
+        .card.alert-active {
+            border-color: rgba(248,113,113,0.35);
         }
-        .card-title {
-            font-size: 13px;
-            letter-spacing: 2px;
-            color: var(--neon-blue);
-            text-transform: uppercase;
-            border-bottom: 1px solid rgba(0, 229, 255, 0.2);
-            padding-bottom: 8px;
+        .card.nav-active {
+            border-color: rgba(59,130,246,0.35);
         }
+
+        /* Card header row */
+        .card-head {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title-row { display: flex; align-items: center; gap: 8px; }
+
         .status-dot {
-            display: inline-block;
-            width: 9px; height: 9px;
-            border-radius: 50%;
-            background: #555;
-            margin-right: 6px;
-            transition: background 0.4s;
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--text-muted);
+            transition: all 0.4s; flex-shrink: 0;
         }
-        .status-dot.active { background: var(--neon-green); box-shadow: 0 0 6px var(--neon-green); }
+        .status-dot.active {
+            background: var(--green);
+            box-shadow: 0 0 6px var(--green);
+            animation: blink 2.4s ease-in-out infinite;
+        }
+
+        .card-title {
+            font-size: 12px; font-weight: 600;
+            letter-spacing: 0.8px; text-transform: uppercase;
+            color: var(--text-sub);
+        }
+
+        .nav-badge {
+            display: none;
+            font-size: 10px; font-weight: 600;
+            color: var(--accent);
+            background: var(--navy-soft);
+            border: 1px solid rgba(59,130,246,0.25);
+            border-radius: 8px; padding: 2px 8px;
+            letter-spacing: 0.5px; text-transform: uppercase;
+        }
+        .nav-badge.show { display: block; }
+
+        /* Camera */
+        .cam-wrap {
+            position: relative;
+            background: #000;
+            aspect-ratio: 4/3;
+            overflow: hidden;
+        }
+
+        .cam-feed {
+            width: 100%; height: 100%;
+            object-fit: cover; display: block;
+        }
+
+        /* Corner brackets on camera */
+        .bk {
+            position: absolute;
+            width: 16px; height: 16px;
+            border-color: rgba(52,211,153,0.45);
+            border-style: solid; pointer-events: none;
+        }
+        .bk.tl { top:7px; left:7px;   border-width:2px 0 0 2px; border-radius:3px 0 0 0; }
+        .bk.tr { top:7px; right:7px;  border-width:2px 2px 0 0; border-radius:0 3px 0 0; }
+        .bk.bl { bottom:7px; left:7px;  border-width:0 0 2px 2px; border-radius:0 0 0 3px; }
+        .bk.br { bottom:7px; right:7px; border-width:0 2px 2px 0; border-radius:0 0 3px 0; }
+
+        /* Alert row */
+        .card-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
+
+        .alert-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--accent); font-weight: 600;
+        }
+
         .alert-text {
-            font-size: 15px;
-            font-weight: bold;
-            color: var(--neon-red);
-            text-shadow: 0 0 6px var(--neon-red);
-            min-height: 48px;
-            line-height: 1.5;
+            font-size: 14px; font-weight: 600; line-height: 1.45;
+            color: var(--text); min-height: 42px;
         }
-        .alert-text.idle { color: #555; text-shadow: none; font-weight: normal; }
+        .alert-text.idle { font-size: 13px; font-weight: 400; color: var(--text-muted); }
+        .alert-text.warn { color: var(--red); }
+        .alert-text.nav  { color: #93c5fd; }
+
         .time-label {
-            font-size: 11px;
-            color: #444;
-            letter-spacing: 1px;
+            font-size: 11px; color: var(--text-muted); letter-spacing: 0.3px;
         }
-        footer {
-            text-align: center;
-            margin-top: 24px;
-            color: #333;
-            font-size: 12px;
-            letter-spacing: 2px;
+
+        /* ── Footer ── */
+        .footer {
+            text-align: center; padding-bottom: 20px;
+            font-size: 11px; color: var(--text-muted); letter-spacing: 1px;
         }
     </style>
 </head>
 <body>
-    <header>SmartEyes &mdash; Giam Sat 3 Thiet Bi</header>
 
-    <div class="grid" id="grid"></div>
+    <header class="header">
+        <div class="logo">
+            <div class="logo-mark">👁</div>
+            <span class="logo-name">SmartEyes AI — Monitor</span>
+        </div>
+        <div class="header-right">
+            <div class="badge" id="onlineCount">0 / 3 online</div>
+            <div class="online-pill">
+                <div class="online-dot"></div>
+                <span>Live</span>
+            </div>
+        </div>
+    </header>
 
-    <footer>Auto-refresh &bull; SmartEyes AI</footer>
+    <div class="wrap">
+        <div class="grid" id="grid"></div>
+    </div>
+
+    <div class="footer">Auto-refresh &bull; SmartEyes AI</div>
 
     <script>
         const DEVICES = ['1', '2', '3'];
         const POLL_MS = 800;
 
-        // Build cards
         const grid = document.getElementById('grid');
         const cards = {};
+        let onlineSet = new Set();
 
         DEVICES.forEach(id => {
             const card = document.createElement('div');
             card.className = 'card';
+            card.id = `card-${id}`;
             card.innerHTML = `
-                <div class="card-title">
-                    <span class="status-dot" id="dot-${id}"></span>
-                    Thiet bi ${id}
+                <div class="card-head">
+                    <div class="card-title-row">
+                        <div class="status-dot" id="dot-${id}"></div>
+                        <span class="card-title">Thiết bị ${id}</span>
+                    </div>
+                    <div class="nav-badge" id="nav-${id}">Dẫn đường</div>
                 </div>
-                <img class="cam-feed" id="cam-${id}" src="/frame/${id}" alt="cam ${id}">
-                <div class="alert-text idle" id="alert-${id}">Chua co tin hieu...</div>
-                <div class="time-label" id="time-${id}">--:--:--</div>
+                <div class="cam-wrap">
+                    <img class="cam-feed" id="cam-${id}" src="/frame/${id}" alt="cam ${id}">
+                    <div class="bk tl"></div>
+                    <div class="bk tr"></div>
+                    <div class="bk bl"></div>
+                    <div class="bk br"></div>
+                </div>
+                <div class="card-body">
+                    <div class="alert-label">Cảnh báo</div>
+                    <div class="alert-text idle" id="alert-${id}">Chưa có tín hiệu...</div>
+                    <div class="time-label" id="time-${id}">--:--:--</div>
+                </div>
             `;
             grid.appendChild(card);
             cards[id] = {
-                dot: card.querySelector(`#dot-${id}`),
-                alert: card.querySelector(`#alert-${id}`),
-                time: card.querySelector(`#time-${id}`),
-                lastTs: 0,
+                dot:      card.querySelector(`#dot-${id}`),
+                alert:    card.querySelector(`#alert-${id}`),
+                time:     card.querySelector(`#time-${id}`),
+                nav:      card.querySelector(`#nav-${id}`),
+                cardEl:   card,
+                lastTs:   0,
                 idleTimer: null,
             };
         });
+
+        function updateOnlineCount() {
+            document.getElementById('onlineCount').textContent =
+                `${onlineSet.size} / ${DEVICES.length} online`;
+        }
 
         async function pollDevice(id) {
             try {
@@ -139,33 +298,46 @@
 
                 if (data.timestamp > 0) {
                     c.dot.classList.add('active');
+                    if (!onlineSet.has(id)) { onlineSet.add(id); updateOnlineCount(); }
                 }
 
                 if (data.timestamp > c.lastTs && data.label !== '') {
                     c.lastTs = data.timestamp;
-                    c.alert.textContent = '⚠️ ' + data.message;
-                    c.alert.classList.remove('idle');
+                    const isNav = data.label.startsWith('nav_');
+                    c.alert.textContent = (isNav ? '🧭 ' : '⚠️ ') + data.message;
+                    c.alert.className = 'alert-text' + (isNav ? ' nav' : ' warn');
+                    c.cardEl.classList.toggle('alert-active', !isNav);
+                    c.cardEl.classList.toggle('nav-active', isNav);
                     const d = new Date(data.timestamp * 1000);
                     c.time.textContent = d.toLocaleTimeString('vi-VN');
 
                     clearTimeout(c.idleTimer);
                     c.idleTimer = setTimeout(() => {
-                        c.alert.textContent = 'Dang quan sat...';
-                        c.alert.classList.add('idle');
+                        c.alert.textContent = 'Đang quan sát...';
+                        c.alert.className = 'alert-text idle';
+                        c.cardEl.classList.remove('alert-active', 'nav-active');
                     }, 6000);
                 }
             } catch (_) {}
         }
 
+        async function pollNavMode(id) {
+            try {
+                const res = await fetch(`/nav_mode/${id}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                cards[id].nav.classList.toggle('show', !!data.nav_mode);
+            } catch (_) {}
+        }
+
         DEVICES.forEach(id => {
             setInterval(() => pollDevice(id), POLL_MS);
+            setInterval(() => pollNavMode(id), 2000);
             pollDevice(id);
+            pollNavMode(id);
 
-            // Refresh camera feed
             const img = document.getElementById(`cam-${id}`);
-            setInterval(() => {
-                img.src = `/frame/${id}?t=${Date.now()}`;
-            }, 200);
+            setInterval(() => { img.src = `/frame/${id}?t=${Date.now()}`; }, 200);
         });
     </script>
 </body>
