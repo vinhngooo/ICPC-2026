@@ -2,210 +2,556 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>SmartEyes AI</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
         :root {
-            --neon-green: #00ff9d;
-            --neon-blue: #00e5ff;
-            --neon-red: #ff2a6d;
-            --bg: #0a0a14;
+            --bg:           #04080f;
+            --navy:         #0a1628;
+            --surface:      rgba(10, 30, 70, 0.55);
+            --surface-hi:   rgba(14, 40, 90, 0.70);
+            --border:       rgba(59, 130, 246, 0.14);
+            --border-hi:    rgba(59, 130, 246, 0.28);
+            --accent:       #3b82f6;
+            --accent-soft:  rgba(59, 130, 246, 0.18);
+            --accent-glow:  rgba(59, 130, 246, 0.40);
+            --green:        #34D399;
+            --green-soft:   rgba(52, 211, 153, 0.15);
+            --red:          #F87171;
+            --red-soft:     rgba(248, 113, 113, 0.15);
+            --text:         #e2e8f0;
+            --text-sub:     #94a3b8;
+            --text-muted:   #3d5a80;
+            --header-h:     58px;
+            --tab-h:        68px;
+            --glass-blur:   blur(22px) saturate(160%);
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%; overflow: hidden; background: var(--bg);
+            display: flex; flex-direction: column;
+        }
+
         body {
-            background: var(--bg);
-            color: white;
-            font-family: 'Segoe UI', sans-serif;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 16px;
+            font-family: -apple-system, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
         }
-        header {
-            text-align: center;
-            padding: 14px 0 18px;
-            letter-spacing: 4px;
-            font-size: 17px;
-            color: var(--neon-blue);
-            text-shadow: 0 0 10px var(--neon-blue);
-            text-transform: uppercase;
-            width: 100%;
-        }
-        .device-badge {
-            display: inline-block;
-            background: rgba(0, 229, 255, 0.1);
-            border: 1px solid rgba(0, 229, 255, 0.4);
-            border-radius: 20px;
-            padding: 4px 18px;
-            font-size: 12px;
-            color: var(--neon-blue);
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            margin-bottom: 16px;
-        }
-        .card {
-            background: rgba(16, 20, 30, 0.85);
-            border: 1px solid rgba(0, 229, 255, 0.25);
-            border-radius: 14px;
-            padding: 14px;
-            width: 100%;
-            max-width: 520px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            box-shadow: 0 0 20px rgba(0, 229, 255, 0.07);
-        }
-        .card-title {
-            font-size: 13px;
-            letter-spacing: 2px;
-            color: var(--neon-blue);
-            text-transform: uppercase;
-            border-bottom: 1px solid rgba(0, 229, 255, 0.2);
-            padding-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .status-dot {
-            width: 9px; height: 9px;
-            border-radius: 50%;
-            background: #555;
-            flex-shrink: 0;
-            transition: background 0.4s;
-        }
-        .status-dot.active {
-            background: var(--neon-green);
-            box-shadow: 0 0 6px var(--neon-green);
-        }
+
+        /* ── Camera — fixed height block ── */
         .cam-wrap {
             position: relative;
-            border-radius: 10px;
-            overflow: hidden;
-            border: 1px solid rgba(0, 255, 157, 0.3);
+            flex-shrink: 0;
+            height: 34vh;
             background: #000;
+            overflow: hidden;
         }
+
         #videoElement {
-            width: 100%;
+            width: 100%; height: 100%;
+            object-fit: cover;
             display: block;
         }
-        .scanline {
+
+        /* Corner brackets */
+        .bracket {
             position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: repeating-linear-gradient(
-                to bottom,
-                transparent 0px,
-                transparent 3px,
-                rgba(0, 255, 157, 0.03) 3px,
-                rgba(0, 255, 157, 0.03) 4px
-            );
+            width: 22px; height: 22px;
+            border-color: rgba(255,255,255,0.28);
+            border-style: solid;
+            pointer-events: none;
+            transition: border-color 0.45s;
+        }
+        .bracket.tl { top:10px; left:10px;   border-width:2px 0 0 2px; border-radius:4px 0 0 0; }
+        .bracket.tr { top:10px; right:10px;  border-width:2px 2px 0 0; border-radius:0 4px 0 0; }
+        .bracket.bl { bottom:10px; left:10px;  border-width:0 0 2px 2px; border-radius:0 0 0 4px; }
+        .bracket.br { bottom:10px; right:10px; border-width:0 2px 2px 0; border-radius:0 0 4px 0; }
+        .bracket.on { border-color: rgba(52,211,153,0.55); }
+
+        /* Camera badge */
+        .cam-badge {
+            position: absolute;
+            bottom: 10px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.48);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 4px 14px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.55);
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            white-space: nowrap;
             pointer-events: none;
         }
-        .alert-box {
+
+        /* ── Header ── */
+        .header {
+            flex-shrink: 0;
+            height: var(--header-h);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 18px;
+            background: rgba(4, 8, 20, 0.95);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--border);
+            z-index: 10;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-mark {
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 60%, #60a5fa 100%);
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
             font-size: 16px;
-            font-weight: bold;
-            color: var(--neon-red);
-            text-shadow: 0 0 8px var(--neon-red);
-            min-height: 44px;
-            line-height: 1.5;
+            flex-shrink: 0;
+            box-shadow: 0 3px 12px rgba(59,130,246,0.4);
         }
-        .alert-box.idle {
-            color: #555;
-            text-shadow: none;
-            font-weight: normal;
-            font-size: 14px;
-        }
-        .start-btn {
-            width: 100%;
-            max-width: 520px;
-            padding: 13px;
+
+        .logo-name {
             font-size: 15px;
-            font-weight: bold;
-            background: transparent;
-            color: var(--neon-green);
-            border: 2px solid var(--neon-green);
-            border-radius: 10px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            background: linear-gradient(120deg, #fff 40%, #93c5fd);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-meta { display: flex; align-items: center; gap: 8px; }
+
+        .chip {
+            background: rgba(10,30,70,0.6);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 4px 11px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+            letter-spacing: 0.3px;
+            backdrop-filter: blur(8px);
+        }
+
+        .live-pill {
+            display: flex; align-items: center; gap: 5px;
+            background: rgba(10,30,70,0.6);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 4px 11px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+            backdrop-filter: blur(8px);
+        }
+
+        .live-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: all 0.4s;
+        }
+        .live-dot.on {
+            background: var(--green);
+            box-shadow: 0 0 6px var(--green);
+            animation: blink 2.5s ease-in-out infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+        /* ── Start overlay ── */
+        #startOverlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(4, 8, 16, 0.82);
+            backdrop-filter: blur(5px);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 10;
+        }
+
+        .start-btn {
+            display: flex; align-items: center; gap: 12px;
+            background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+            border: none;
+            border-radius: 18px;
+            padding: 16px 36px;
+            font-size: 17px;
+            font-weight: 600;
+            color: #fff;
             cursor: pointer;
-            text-transform: uppercase;
-            letter-spacing: 3px;
-            transition: all 0.3s ease;
-            box-shadow: 0 0 12px rgba(0, 255, 157, 0.15) inset;
-            margin-bottom: 4px;
+            letter-spacing: 0.3px;
+            box-shadow: 0 8px 32px rgba(59,130,246,0.45), 0 0 0 1px rgba(59,130,246,0.3);
+            transition: transform 0.15s, box-shadow 0.15s;
         }
-        .start-btn:hover {
-            background: var(--neon-green);
-            color: #000;
-            box-shadow: 0 0 24px var(--neon-green);
+        .start-btn:active { transform: scale(0.96); box-shadow: 0 4px 16px rgba(59,130,246,0.3); }
+
+        /* ── Content panel ── */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            background: rgba(4, 10, 25, 0.96);
+            padding: 14px 16px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
         }
-        .time-label {
-            font-size: 11px;
-            color: #444;
-            letter-spacing: 1px;
+
+        /* ── YOLO section ── */
+        #yoloSection { display: flex; flex-direction: column; gap: 10px; }
+
+        .alert-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 14px 16px;
+            backdrop-filter: blur(8px);
+            transition: border-color 0.35s, background 0.35s;
         }
-        footer {
-            margin-top: 24px;
-            color: #333;
-            font-size: 11px;
-            letter-spacing: 2px;
+        .alert-card.warn {
+            border-color: rgba(248,113,113,0.35);
+            background: rgba(248,50,50,0.07);
         }
+
+        .alert-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .alert-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+            color: var(--accent); font-weight: 600;
+        }
+        .alert-time { font-size: 11px; color: var(--text-muted); }
+
+        #alertBox { font-size: 17px; font-weight: 600; line-height: 1.45; color: var(--text); }
+        #alertBox.idle { font-size: 14px; font-weight: 400; color: var(--text-muted); }
+
+        .nav-active-bar {
+            display: none; align-items: center; gap: 10px;
+            background: var(--green-soft);
+            border: 1px solid rgba(52,211,153,0.22);
+            border-radius: 12px;
+            padding: 10px 14px;
+        }
+        .nav-active-bar.show { display: flex; }
+        .nav-active-bar span { font-size: 13px; color: var(--green); font-weight: 500; }
+
+        .nav-btn {
+            width: 100%; padding: 13px;
+            border-radius: 13px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-sub);
+            font-size: 14px; font-weight: 600;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            transition: all 0.2s;
+            letter-spacing: 0.2px;
+            backdrop-filter: blur(8px);
+        }
+        .nav-btn:active { transform: scale(0.98); }
+        .nav-btn.on {
+            background: var(--green-soft);
+            border-color: rgba(52,211,153,0.32);
+            color: var(--green);
+        }
+
+        /* ── AI section ── */
+        #aiSection {
+            display: none; flex-direction: column;
+            flex: 1; min-height: 0; gap: 10px;
+        }
+
+        .chat-scroll {
+            flex: 1; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 8px;
+            min-height: 40px;
+        }
+
+        .chat-empty {
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 8px;
+            padding: 20px 16px;
+            color: var(--text-muted); text-align: center;
+        }
+        .chat-empty-icon { font-size: 34px; opacity: 0.3; }
+        .chat-empty-hint { font-size: 13px; line-height: 1.5; max-width: 220px; }
+
+        .bubble {
+            padding: 9px 13px; border-radius: 15px;
+            font-size: 14px; line-height: 1.5;
+            max-width: 88%; word-break: break-word;
+        }
+        .bubble.user {
+            background: linear-gradient(135deg, rgba(59,130,246,0.25), rgba(29,78,216,0.18));
+            border: 1px solid rgba(59,130,246,0.3);
+            color: #bfdbfe;
+            align-self: flex-end; border-bottom-right-radius: 4px;
+        }
+        .bubble.bot {
+            background: var(--surface-hi);
+            border: 1px solid var(--border-hi);
+            color: var(--text);
+            align-self: flex-start; border-bottom-left-radius: 4px;
+        }
+
+        .mic-area {
+            display: flex; flex-direction: column; align-items: center;
+            gap: 6px; padding-bottom: 2px; flex-shrink: 0;
+        }
+
+        #chatStatus {
+            font-size: 12px; color: var(--text-muted);
+            min-height: 16px; transition: color 0.2s; letter-spacing: 0.2px;
+        }
+        #chatStatus.listening { color: var(--red); }
+        #chatStatus.thinking  { color: var(--accent); }
+
+        .mic-btn {
+            width: 62px; height: 62px; border-radius: 50%;
+            border: 2px solid rgba(59,130,246,0.32);
+            background: rgba(59,130,246,0.08);
+            color: var(--accent); font-size: 24px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.22s;
+            box-shadow: 0 0 0 0 rgba(59,130,246,0.2);
+        }
+        .mic-btn.active {
+            border-color: var(--red);
+            background: var(--red-soft);
+            color: var(--red);
+            animation: mic-ring 1.1s ease-out infinite;
+        }
+        @keyframes mic-ring {
+            0%  { box-shadow: 0 0 0 0   rgba(248,113,113,0.32); }
+            70% { box-shadow: 0 0 0 14px rgba(248,113,113,0);   }
+            100%{ box-shadow: 0 0 0 0   rgba(248,113,113,0);    }
+        }
+
+        /* ── Tab bar ── */
+        .tab-bar {
+            flex-shrink: 0;
+            height: var(--tab-h);
+            display: none;
+            background: rgba(4, 8, 20, 0.98);
+            backdrop-filter: var(--glass-blur);
+            border-top: 1px solid var(--border);
+            z-index: 10;
+            padding: 0 6px;
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        .tab-bar.show { display: flex; }
+
+        /* Sliding mode indicator pill */
+        .tab-slide {
+            position: absolute;
+            top: 8px; bottom: 8px;
+            width: calc(50% - 10px);
+            left: 6px;
+            background: rgba(30, 64, 140, 0.5);
+            border: 1px solid rgba(59,130,246,0.32);
+            border-radius: 13px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 14px rgba(59,130,246,0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+            transition: transform 0.35s cubic-bezier(0.34, 1.4, 0.64, 1);
+            pointer-events: none;
+        }
+        .tab-slide.ai {
+            transform: translateX(calc(100% + 8px));
+        }
+
+        .tab {
+            flex: 1; position: relative; z-index: 1;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 3px;
+            border: none; background: transparent;
+            color: var(--text-muted);
+            font-size: 11px; font-weight: 500;
+            cursor: pointer; padding: 0;
+            transition: color 0.25s;
+            letter-spacing: 0.3px;
+        }
+        .tab.active { color: #93c5fd; }
+        .tab-icon { font-size: 21px; line-height: 1; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 2px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(59,130,246,0.2); border-radius: 4px; }
     </style>
 </head>
 <body>
-    <header>SmartEyes AI</header>
-    <div class="device-badge" id="deviceBadge">Thiet bi ...</div>
 
-    <button class="start-btn" id="startBtn">Kich Hoat Camera</button>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-mark">👁</div>
+            <span class="logo-name">SmartEyes AI</span>
+        </div>
+        <div class="header-meta">
+            <div class="chip" id="deviceBadge">—</div>
+            <div class="live-pill">
+                <div class="live-dot" id="liveDot"></div>
+                <span id="liveText">Tắt</span>
+            </div>
+        </div>
+    </header>
 
-    <div class="card">
-        <div class="card-title">
-            <span class="status-dot" id="statusDot"></span>
-            Camera
+    <!-- Camera -->
+    <div class="cam-wrap">
+        <video id="videoElement" autoplay playsinline></video>
+        <div class="bracket tl" id="bTL"></div>
+        <div class="bracket tr" id="bTR"></div>
+        <div class="bracket bl" id="bBL"></div>
+        <div class="bracket br" id="bBR"></div>
+        <div class="cam-badge" id="camBadge">Chờ khởi động</div>
+        <div id="startOverlay">
+            <button class="start-btn" id="startBtn">
+                <span style="font-size:20px">▶</span> Bắt đầu
+            </button>
         </div>
-        <div class="cam-wrap">
-            <video id="videoElement" autoplay playsinline></video>
-            <div class="scanline"></div>
-        </div>
-        <div class="alert-box idle" id="alertBox">Dang cho tin hieu...</div>
-        <div class="time-label" id="timeLabel">--:--:--</div>
     </div>
 
-    <footer>SmartEyes &bull; Auto-detect</footer>
+    <!-- Content panel -->
+    <div class="content">
+
+        <!-- YOLO section -->
+        <div id="yoloSection">
+            <div class="alert-card" id="alertCard">
+                <div class="alert-header">
+                    <span class="alert-label">Phát hiện</span>
+                    <span class="alert-time" id="timeLabel">--:--:--</span>
+                </div>
+                <div id="alertBox" class="idle">Đang quan sát...</div>
+            </div>
+
+            <div class="nav-active-bar" id="navBadge">
+                <span>🧭</span>
+                <span>Chế độ dẫn đường đang bật</span>
+            </div>
+
+            <button class="nav-btn" id="navBtn">
+                <span>🧭</span> Dẫn đường
+            </button>
+        </div>
+
+        <!-- AI section -->
+        <div id="aiSection">
+            <div class="chat-scroll" id="chatHistory">
+                <div class="chat-empty" id="chatEmpty">
+                    <div class="chat-empty-icon">💬</div>
+                    <div class="chat-empty-hint">Nhấn mic và hỏi bất kỳ điều gì về những gì camera đang thấy</div>
+                </div>
+            </div>
+            <div class="mic-area">
+                <div id="chatStatus">Nhấn mic để nói chuyện</div>
+                <button class="mic-btn" id="micBtn">🎙</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Tab bar with sliding mode indicator -->
+    <nav class="tab-bar" id="tabBar">
+        <div class="tab-slide" id="tabSlide"></div>
+        <button class="tab active" id="tabYolo" onclick="switchMode('yolo')">
+            <span class="tab-icon">👁</span>
+            <span>Phát hiện</span>
+        </button>
+        <button class="tab" id="tabAi" onclick="switchMode('ai')">
+            <span class="tab-icon">💬</span>
+            <span>Hỏi AI</span>
+        </button>
+    </nav>
 
     <canvas id="canvas" style="display:none;"></canvas>
     <audio id="alertAudio"></audio>
 
     <script>
-        let deviceId = null;
+        /* ── State ── */
+        let deviceId       = null;
+        let currentMode    = 'yolo';
+        let navMode        = false;
+        let lastTimestamp  = 0;
+        let isProcessing   = false;
+        let isAudioPlaying = false;
+        let pendingAudio   = null;
+        let audioTimeout   = null;
+        let idleTimer      = null;
+        let frameCounter   = 0;
 
+        /* ── DOM refs ── */
+        const video      = document.getElementById('videoElement');
+        const canvas     = document.getElementById('canvas');
+        const ctx        = canvas.getContext('2d');
+        const alertBox   = document.getElementById('alertBox');
+        const alertCard  = document.getElementById('alertCard');
+        const alertAudio = document.getElementById('alertAudio');
+        const timeLabel  = document.getElementById('timeLabel');
+        const navBtn     = document.getElementById('navBtn');
+        const navBadge   = document.getElementById('navBadge');
+        const chatStatus = document.getElementById('chatStatus');
+        const micBtn     = document.getElementById('micBtn');
+        const chatHistory= document.getElementById('chatHistory');
+        const chatEmpty  = document.getElementById('chatEmpty');
+
+        /* ── Device init ── */
         async function initDevice() {
             const saved = localStorage.getItem('smarteyes_device_id');
             if (saved) {
                 deviceId = saved;
             } else {
-                const res = await fetch('/register', { method: 'POST' });
+                const res  = await fetch('/register', { method: 'POST' });
                 const data = await res.json();
                 deviceId = data.device_id;
                 localStorage.setItem('smarteyes_device_id', deviceId);
             }
-            document.getElementById('deviceBadge').textContent = 'Thiet bi ' + deviceId;
-            document.title = 'SmartEyes - Thiet bi ' + deviceId;
+            document.getElementById('deviceBadge').textContent = 'Thiết bị ' + deviceId;
+            document.title = 'SmartEyes – Thiết bị ' + deviceId;
         }
 
-        const video = document.getElementById('videoElement');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const alertBox = document.getElementById('alertBox');
-        const alertAudio = document.getElementById('alertAudio');
-        const statusDot = document.getElementById('statusDot');
-        const timeLabel = document.getElementById('timeLabel');
+        /* ── Mode switch ── */
+        function switchMode(mode) {
+            currentMode = mode;
+            fetch(`/mode/${deviceId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode })
+            });
 
-        let lastTimestamp = 0;
-        let isProcessing = false;
-        let isAudioPlaying = false;
-        let pendingAudio = null;
-        let audioTimeout = null;
-        let idleTimer = null;
+            const isAi = mode === 'ai';
+            document.getElementById('yoloSection').style.display = isAi ? 'none' : 'flex';
+            document.getElementById('aiSection').style.display   = isAi ? 'flex' : 'none';
+            document.getElementById('camBadge').textContent = isAi ? 'Chế độ AI' : 'Phát hiện tự động';
+            document.getElementById('tabYolo').classList.toggle('active', !isAi);
+            document.getElementById('tabAi').classList.toggle('active',   isAi);
+            document.getElementById('tabSlide').classList.toggle('ai',    isAi);
 
+            ['bTL','bTR','bBL','bBR'].forEach(id => {
+                document.getElementById(id).classList.toggle('on', !isAi);
+            });
+        }
+
+        /* ── Nav mode ── */
+        navBtn.addEventListener('click', async function() {
+            const res  = await fetch(`/nav_mode/${deviceId}`, { method: 'POST' });
+            const data = await res.json();
+            navMode = data.nav_mode;
+            navBtn.classList.toggle('on', navMode);
+            navBtn.innerHTML = navMode
+                ? '<span>🧭</span> Tắt dẫn đường'
+                : '<span>🧭</span> Dẫn đường';
+            navBadge.classList.toggle('show', navMode);
+        });
+
+        /* ── Audio helpers ── */
         function onAudioDone() {
             isAudioPlaying = false;
             clearTimeout(audioTimeout);
@@ -221,56 +567,178 @@
 
         function playAlert(src, message) {
             isAudioPlaying = true;
-            alertBox.innerText = "⚠️ " + message;
-            alertBox.classList.remove('idle');
-            const d = new Date();
-            timeLabel.textContent = d.toLocaleTimeString('vi-VN');
+            const now = new Date();
+            timeLabel.textContent = now.toLocaleTimeString('vi-VN');
 
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-                alertBox.textContent = 'Dang quan sat...';
-                alertBox.classList.add('idle');
-            }, 6000);
+            if (currentMode === 'yolo') {
+                alertBox.textContent = message;
+                alertBox.classList.remove('idle');
+                alertCard.classList.add('warn');
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => {
+                    alertBox.textContent = 'Đang quan sát...';
+                    alertBox.classList.add('idle');
+                    alertCard.classList.remove('warn');
+                }, 6000);
+            }
 
             alertAudio.src = src;
-            alertAudio.play().catch(e => {
-                console.error("Loi loa:", e);
-                onAudioDone();
-            });
+            alertAudio.play().catch(e => { console.error('Audio error:', e); onAudioDone(); });
             clearTimeout(audioTimeout);
-            audioTimeout = setTimeout(onAudioDone, 10000);
+            audioTimeout = setTimeout(onAudioDone, 12000);
         }
 
+        /* ── AI chat ── */
+        function addBubble(text, role) {
+            if (chatEmpty) chatEmpty.style.display = 'none';
+            const div = document.createElement('div');
+            div.className = 'bubble ' + role;
+            div.textContent = text;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function captureFrameB64() {
+            const MAX_W = 640;
+            const scale = video.videoWidth > MAX_W ? MAX_W / video.videoWidth : 1;
+            canvas.width  = Math.round(video.videoWidth  * scale);
+            canvas.height = Math.round(video.videoHeight * scale);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', 0.75);
+        }
+
+        async function sendAiQuery(userText) {
+            addBubble(userText, 'user');
+            chatStatus.textContent = 'Đang xử lý...';
+            chatStatus.className   = 'thinking';
+
+            const imageData = captureFrameB64();
+            try {
+                const res  = await fetch('/ai_query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: userText, image: imageData, device_id: deviceId })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    addBubble('Lỗi: ' + data.error, 'bot');
+                } else {
+                    addBubble(data.response, 'bot');
+                    if (data.audio_b64) {
+                        playAlert('data:audio/mpeg;base64,' + data.audio_b64, data.response);
+                    }
+                }
+            } catch (err) {
+                addBubble('Lỗi kết nối server.', 'bot');
+            }
+            chatStatus.textContent = 'Nhấn mic để nói chuyện';
+            chatStatus.className   = '';
+        }
+
+        /* ── Whisper recording ── */
+        let mediaRecorder = null;
+        let audioChunks   = [];
+        let isRecording   = false;
+
+        async function startRecording() {
+            try {
+                const stream   = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+                mediaRecorder  = new MediaRecorder(stream, { mimeType });
+                audioChunks    = [];
+                mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    const blob = new Blob(audioChunks, { type: mimeType });
+                    await sendAudioToWhisper(blob, mimeType);
+                };
+                mediaRecorder.start();
+                isRecording = true;
+                micBtn.classList.add('active');
+                chatStatus.textContent = 'Đang ghi âm… (nhấn lại để dừng)';
+                chatStatus.className   = 'listening';
+            } catch (err) {
+                chatStatus.textContent = 'Lỗi micro: ' + err.message;
+                chatStatus.className   = '';
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                micBtn.classList.remove('active');
+                chatStatus.textContent = 'Đang xử lý giọng nói...';
+                chatStatus.className   = 'thinking';
+            }
+        }
+
+        async function sendAudioToWhisper(blob, mimeType) {
+            const ext      = mimeType.includes('ogg') ? 'ogg' : 'webm';
+            const formData = new FormData();
+            formData.append('audio', blob, 'recording.' + ext);
+            try {
+                const res  = await fetch('/transcribe', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.text && data.text.trim()) {
+                    await sendAiQuery(data.text.trim());
+                } else {
+                    chatStatus.textContent = 'Không nghe rõ, thử lại';
+                    chatStatus.className   = '';
+                }
+            } catch {
+                chatStatus.textContent = 'Lỗi kết nối server';
+                chatStatus.className   = '';
+            }
+        }
+
+        micBtn.addEventListener('click', () => {
+            if (isRecording) stopRecording();
+            else startRecording();
+        });
+
+        /* ── Camera start ── */
         initDevice();
 
         document.getElementById('startBtn').addEventListener('click', async function() {
-            this.style.display = 'none';
-            statusDot.classList.add('active');
+            document.getElementById('startOverlay').style.display = 'none';
+            document.getElementById('tabBar').classList.add('show');
+            document.getElementById('yoloSection').style.display = 'flex';
+            document.getElementById('liveDot').classList.add('on');
+            document.getElementById('liveText').textContent = 'Live';
+            document.getElementById('camBadge').textContent = 'Phát hiện tự động';
+
+            ['bTL','bTR','bBL','bBR'].forEach(id => document.getElementById(id).classList.add('on'));
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment" },
-                    audio: false
+                    video: { facingMode: 'environment' }, audio: false
                 });
                 video.srcObject = stream;
             } catch (err) {
-                alertBox.innerText = "Loi mo camera: " + err.message;
+                alertBox.textContent = 'Lỗi mở camera: ' + err.message;
                 alertBox.classList.remove('idle');
                 return;
             }
 
-            alertAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            /* Unlock audio autoplay */
+            alertAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
             alertAudio.play().catch(() => {});
 
             setInterval(sendFrameToServer, 100);
         });
 
+        /* ── Frame loop ── */
         async function sendFrameToServer() {
+            frameCounter++;
+            if (currentMode === 'ai' && frameCounter % 10 !== 0) return;
             if (isProcessing || !video.videoWidth) return;
             isProcessing = true;
 
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+            const MAX_W = 640;
+            const scale = video.videoWidth > MAX_W ? MAX_W / video.videoWidth : 1;
+            canvas.width  = Math.round(video.videoWidth  * scale);
+            canvas.height = Math.round(video.videoHeight * scale);
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             const imageData = canvas.toDataURL('image/jpeg', 0.6);
@@ -282,19 +750,17 @@
                     body: JSON.stringify({ image: imageData, device_id: deviceId })
                 });
 
-                const data = await response.json();
+                if (currentMode !== 'yolo') { isProcessing = false; return; }
 
-                if (data.timestamp > lastTimestamp && data.label !== "") {
+                const data = await response.json();
+                if (data.timestamp > lastTimestamp && data.label !== '') {
                     lastTimestamp = data.timestamp;
                     const src = `/audio/${data.label}?t=${data.timestamp}`;
-                    if (!isAudioPlaying) {
-                        playAlert(src, data.message);
-                    } else {
-                        pendingAudio = { src, message: data.message };
-                    }
+                    if (!isAudioPlaying) playAlert(src, data.message);
+                    else pendingAudio = { src, message: data.message };
                 }
             } catch (err) {
-                console.error("Loi mang:", err);
+                console.error('Network error:', err);
             } finally {
                 isProcessing = false;
             }
