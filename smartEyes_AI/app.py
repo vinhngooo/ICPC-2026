@@ -1,6 +1,6 @@
 import cv2
 import io
-import json
+import math
 import time
 import webbrowser
 import threading
@@ -25,11 +25,18 @@ CORS(app)
 
 DANGER_CLASS_IDS = [0, 1, 2, 3, 5, 7, 13, 15, 16, 56, 60]
 
+FRAME_SKIP   = 2  # Bỏ qua N-1 frame, chỉ inference frame thứ N
+AUX_INTERVAL = 3  # Chạy door/stairs mỗi N lần inference chính, cache giữa các lần
+
 class CombinedModel:
-    """Bọc nhiều model thành 1, gọi như YOLO bình thường."""
     def __init__(self):
-        self._main = YOLO("yolov8s.pt")
+        self._main = YOLO("yolo11n.pt")
         self.names = dict(self._main.names)
+        self._aux_counter = 0
+        self._aux_cache: list = []  # list of Tensor (n×6) — kết quả door/stairs được cache
+
+        self._door_id   = None
+        self._stairs_id = None
 
         self._door = None
         if os.path.exists("doors.pt"):
@@ -45,35 +52,96 @@ class CombinedModel:
             self.names[next_id] = "stairs"
             self._stairs_id = next_id
 
+    def to_device(self, device):
+        self._main.model.to(device)
+        if self._door is not None:
+            self._door.model.to(device)
+        if self._stairs is not None:
+            self._stairs.model.to(device)
+        if device == "cpu":
+            torch.cuda.empty_cache()
+        print(f"[YOLO] Moved to {device}")
+
     def __call__(self, frame, **kwargs):
         results = self._main(frame, **kwargs)
+        self._aux_counter += 1
 
-        if self._door is not None:
-            door_results = self._door(frame, verbose=False)
-            for box in door_results[0].boxes:
-                box.data = box.data.clone()
-                box.data[:, 5] = self._door_id
-                results[0].boxes = _merge_boxes(results[0].boxes, box)
+        # Chạy door/stairs mỗi AUX_INTERVAL lần, cache tensor kết quả
+        if self._aux_counter % AUX_INTERVAL == 0:
+            self._aux_cache = []
+            if self._door is not None:
+                d = self._door(frame, verbose=False)[0].boxes.data.clone()
+                if d.shape[0] > 0:
+                    d[:, 5] = self._door_id
+                    self._aux_cache.append(d)
+            if self._stairs is not None:
+                d = self._stairs(frame, verbose=False)[0].boxes.data.clone()
+                if d.shape[0] > 0:
+                    d[:, 5] = self._stairs_id
+                    self._aux_cache.append(d)
 
-        if self._stairs is not None:
-            stairs_results = self._stairs(frame, verbose=False)
-            for box in stairs_results[0].boxes:
-                box.data = box.data.clone()
-                box.data[:, 5] = self._stairs_id
-                results[0].boxes = _merge_boxes(results[0].boxes, box)
+        # Merge cached aux boxes vào kết quả chính
+        for extra in self._aux_cache:
+            results[0].boxes = _merge_boxes(results[0].boxes, extra)
 
         results[0].names = self.names
         return results
 
-def _merge_boxes(base, extra):
-    if base.data.shape[0] == 0:
-        return extra
-    base.data = torch.cat([base.data, extra.data], dim=0)
-    return base
+    def track(self, frame, **kwargs):
+        """Gọi BoT-SORT built-in của Ultralytics, sau đó merge aux boxes."""
+        results = self._main.track(frame, **kwargs)
+        self._aux_counter += 1
+
+        if self._aux_counter % AUX_INTERVAL == 0:
+            self._aux_cache = []
+            if self._door is not None:
+                d = self._door(frame, verbose=False)[0].boxes.data.clone()
+                if d.shape[0] > 0:
+                    d[:, 5] = self._door_id
+                    self._aux_cache.append(d)
+            if self._stairs is not None:
+                d = self._stairs(frame, verbose=False)[0].boxes.data.clone()
+                if d.shape[0] > 0:
+                    d[:, 5] = self._stairs_id
+                    self._aux_cache.append(d)
+
+        for extra in self._aux_cache:
+            results[0].boxes = _merge_boxes(results[0].boxes, extra)
+
+        results[0].names = self.names
+        return results
+
+def _merge_boxes(base_boxes, extra_data: torch.Tensor):
+    """Thêm extra_data (n×6) vào base_boxes (có thể n×7 khi BoT-SORT đang track).
+    Nếu base có 7 cột (x1,y1,x2,y2,track_id,conf,cls), chèn -1 làm track_id cho aux boxes.
+    """
+    if extra_data.shape[0] == 0:
+        return base_boxes
+    base_data = base_boxes.data
+    if base_data.shape[0] == 0:
+        base_boxes.data = extra_data
+        return base_boxes
+    if base_data.shape[1] == 7 and extra_data.shape[1] == 6:
+        # Chèn cột track_id = -1 vào vị trí 4 cho aux boxes
+        pad = torch.full((extra_data.shape[0], 1), -1.0,
+                         device=extra_data.device, dtype=extra_data.dtype)
+        extra_data = torch.cat([extra_data[:, :4], pad, extra_data[:, 4:]], dim=1)
+    base_boxes.data = torch.cat([base_data, extra_data], dim=0)
+    return base_boxes
 
 model = CombinedModel()
 INFER_DEVICE = 0 if torch.cuda.is_available() else "cpu"
 print(f"[Model] Device: {'GPU (CUDA)' if INFER_DEVICE == 0 else 'CPU'}")
+
+_depth_device = "cuda" if torch.cuda.is_available() else "cpu"
+print("[Metric3Dv2] Đang tải model metric depth...")
+_depth_model = torch.hub.load(
+    r"C:\Users\Vinh\.cache\torch\hub\yvanyin_metric3d_main",
+    "metric3d_vit_small", pretrain=True, source="local"
+)
+_depth_model = _depth_model.to(_depth_device).eval()
+_depth_lock  = threading.Lock()
+print(f"[Metric3Dv2] Sẵn sàng ({_depth_device.upper()})")
 
 VIET_LABELS = {
     "person": "người", "car": "xe hơi", "motorcycle": "xe máy",
@@ -102,18 +170,21 @@ KNOWN_HEIGHTS_CM = {
 # Tiêu cự ước tính cho camera điện thoại ở độ phân giải ~720p
 FOCAL_LENGTH_PX = 600
 
-DISTANCES = ["dưới 1 mét", "khoảng 1 mét", "khoảng 2 mét", ""]
+DISTANCES = ["rất gần", "khoảng 2 mét", "khoảng 3 mét", "khoảng 5 mét", ""]
 
 # Navigation mode
 NAV_COOLDOWN         = 2.5   # giây giữa 2 hướng dẫn liên tiếp
 NAV_REPEAT_COOLDOWN  = 5.0   # giây trước khi lặp lại cùng một thông điệp
-NAV_DANGER_THRESHOLD = 3.0   # tổng điểm nguy hiểm của 1 vùng
+NAV_DANGER_THRESHOLD = 4.0   # tổng điểm — vùng coi là có vật cản
+NAV_URGENT_THRESHOLD = 12.0  # tổng điểm — vật cản rất gần, cần dừng/cẩn thận ngay
+DEPTH_INTERVAL       = 5     # Chạy DepthAnything mỗi N inference (GPU: 5 ổn)
 
 NAV_MESSAGES = {
-    "nav_straight":   "Tiếp tục đi thẳng",
-    "nav_turn_left":  "Có vật cản phía trước, hãy rẽ trái",
-    "nav_turn_right": "Có vật cản phía trước, hãy rẽ phải",
-    "nav_blocked":    "Dừng lại! Tất cả hướng đều có vật cản",
+    "nav_straight":   "Đường thông, tiếp tục đi thẳng",
+    "nav_caution":    "Có vật cản phía trước, đi chậm lại",
+    "nav_turn_left":  "Rẽ trái",
+    "nav_turn_right": "Rẽ phải",
+    "nav_blocked":    "Dừng lại! Xung quanh có vật cản",
     "nav_start":      "Bật chế độ dẫn đường",
     "nav_stop_mode":  "Tắt chế độ dẫn đường",
 }
@@ -121,9 +192,9 @@ NAV_MESSAGES = {
 MAX_DEVICES = 3
 COOLDOWN = 6
 
-APPROACH_RATIO    = 1.25
+APPROACH_RATIO    = 1.40   # cần tăng 40% area để tránh jitter YOLO gây false positive
 APPROACH_COOLDOWN = 3
-TRACK_WINDOW      = 4
+TRACK_WINDOW      = 5      # window rộng hơn → trend ổn định hơn
 
 os.makedirs("audio", exist_ok=True)
 
@@ -132,15 +203,28 @@ os.makedirs("audio", exist_ok=True)
 # ---------------------------------------------------------------------------
 
 print("[Whisper] Đang tải model small...")
-whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
-print("[Whisper] Sẵn sàng.")
+_whisper_device       = "cuda" if torch.cuda.is_available() else "cpu"
+_whisper_compute_type = "float16" if _whisper_device == "cuda" else "int8"
+whisper_model = WhisperModel("small", device=_whisper_device, compute_type=_whisper_compute_type)
+print(f"[Whisper] Sẵn sàng. Device: {_whisper_device.upper()} ({_whisper_compute_type})")
 
 # ---------------------------------------------------------------------------
-# Ollama / AI Vision
+# OpenRouter Vision API
 # ---------------------------------------------------------------------------
 
-OLLAMA_URL   = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "qwen2.5vl:7b"
+OPENROUTER_API_KEY = "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"
+OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+
+# Thử tuần tự — dùng model đầu tiên, nếu hết quota (429) thì fallback; reset sau 24h
+_FREE_VISION_MODELS = [
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "meta-llama/llama-4-scout:free",
+]
+_model_exhausted: dict = {}  # model -> timestamp khi bị 429
+
+def _is_exhausted(model: str) -> bool:
+    return (time.time() - _model_exhausted.get(model, 0)) < 86400
+print(f"[OpenRouter] Race {len(_FREE_VISION_MODELS)} models: {_FREE_VISION_MODELS}")
 
 def _resize_image_b64(image_b64: str, max_side: int = 512) -> str:
     raw = base64.b64decode(image_b64)
@@ -150,44 +234,66 @@ def _resize_image_b64(image_b64: str, max_side: int = 512) -> str:
     if max(h, w) > max_side:
         scale = max_side / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 88])
     return base64.b64encode(buf.tobytes()).decode()
 
+
+_SYSTEM_PROMPT = (
+    "Bạn là mắt AI cho người khiếm thị. Trả lời bằng tiếng Việt, ngắn gọn, không lặp ý. "
+    "Mô tả vật/người/chướng ngại vật, đọc chữ, hướng dẫn trái/phải/thẳng/dừng, cảnh báo nguy hiểm. "
+    "Không mô tả màu sắc hay ngoại hình chi tiết — chỉ nêu thông tin cần thiết để di chuyển an toàn. "
+    "Không từ chối, không hỏi lại, không giải thích — đi thẳng vào nội dung."
+)
+
+def _call_one_model(model: str, image_b64: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                {"type": "text", "text": prompt},
+            ]},
+        ],
+        "max_tokens": 120,
+        "temperature": 0.3,
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": "https://smarteyes.local",
+        "X-Title": "SmartEyes AI",
+    }
+    resp = http_requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=25)
+    if not resp.ok:
+        print(f"[AI] {model} HTTP {resp.status_code}: {resp.text[:300]}")
+        resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
 def query_ai(image_b64: str, user_text: str) -> str:
-    """Stream LLM response and return full text."""
     if ',' in image_b64:
         image_b64 = image_b64.split(',')[1]
     image_b64 = _resize_image_b64(image_b64)
-    prompt = (
-        f"You are a vision assistant for a blind person. "
-        f"Look at the image and answer the question in Vietnamese. "
-        f"Reply in exactly 1-2 short sentences. No lists, no explanations. "
-        f"Question: {user_text}"
-    )
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "user", "content": prompt, "images": [image_b64]},
-        ],
-        "stream": True,
-        "options": {"temperature": 0.1, "num_predict": 100},
-    }
-    resp = http_requests.post(OLLAMA_URL, json=payload, stream=True, timeout=90)
-    resp.raise_for_status()
 
-    full_text = ""
-    for line in resp.iter_lines():
-        if not line:
+    errors = []
+    for m in _FREE_VISION_MODELS:
+        if _is_exhausted(m):
+            print(f"[AI] {m} bỏ qua (hết quota 24h)")
             continue
+        t0 = time.time()
         try:
-            chunk = json.loads(line)
-        except Exception:
-            continue
-        full_text += chunk.get("message", {}).get("content", "")
-        if chunk.get("done"):
-            break
+            text = _call_one_model(m, image_b64, user_text)
+            if text:
+                print(f"[AI] {m} → {time.time()-t0:.1f}s ✓")
+                return text
+        except Exception as e:
+            if "429" in str(e):
+                _model_exhausted[m] = time.time()
+                print(f"[AI] {m} hết quota → chuyển fallback")
+            errors.append(f"{m}: {e}")
+            print(f"[AI] {m} → {e}")
 
-    return full_text.strip()
+    raise Exception(f"Tất cả model đều lỗi: {errors}")
 
 async def _tts_to_bytes(text: str, key: str) -> bytes:
     path = f"audio/{key}.mp3"
@@ -207,79 +313,6 @@ def tts_sync(text: str, key: str) -> str:
         return ""
 
 # ---------------------------------------------------------------------------
-# Simple IoU tracker (không cần thư viện ngoài)
-# ---------------------------------------------------------------------------
-
-def _compute_iou(a, b):
-    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
-    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-    if inter == 0:
-        return 0.0
-    area_a = (a[2] - a[0]) * (a[3] - a[1])
-    area_b = (b[2] - b[0]) * (b[3] - b[1])
-    return inter / (area_a + area_b - inter)
-
-class SimpleTracker:
-    """Gán track_id bền vững cho các detection bằng IoU matching."""
-    def __init__(self, iou_threshold=0.3, max_lost=5):
-        self._tracks  = {}   # track_id -> {"box": [x1,y1,x2,y2], "lost": int}
-        self._next_id = 1
-        self._iou_thr = iou_threshold
-        self._max_lost = max_lost
-
-    def update(self, detections):
-        """detections: list of [x1,y1,x2,y2, label, area]
-        Trả về list of [x1,y1,x2,y2, label, area, track_id]
-        """
-        if not detections:
-            for tid in list(self._tracks):
-                self._tracks[tid]["lost"] += 1
-                if self._tracks[tid]["lost"] > self._max_lost:
-                    del self._tracks[tid]
-            return []
-
-        track_ids  = list(self._tracks.keys())
-        track_boxes = [self._tracks[tid]["box"] for tid in track_ids]
-
-        matched_det  = {}   # det_idx  -> track_id
-        matched_trk  = set()
-
-        for i, det in enumerate(detections):
-            best_iou, best_j = self._iou_thr, None
-            for j, tbox in enumerate(track_boxes):
-                if j in matched_trk:
-                    continue
-                iou = _compute_iou(det[:4], tbox)
-                if iou > best_iou:
-                    best_iou, best_j = iou, j
-            if best_j is not None:
-                matched_det[i] = track_ids[best_j]
-                matched_trk.add(best_j)
-
-        new_tracks = {}
-        result = []
-        for i, det in enumerate(detections):
-            if i in matched_det:
-                tid = matched_det[i]
-            else:
-                tid = self._next_id
-                self._next_id += 1
-            new_tracks[tid] = {"box": det[:4], "lost": 0}
-            result.append(det + [tid])
-
-        # Giữ track bị mất tạm thời
-        for j, tid in enumerate(track_ids):
-            if j not in matched_trk:
-                trk = self._tracks[tid]
-                trk["lost"] += 1
-                if trk["lost"] <= self._max_lost:
-                    new_tracks[tid] = trk
-
-        self._tracks = new_tracks
-        return result
-
-# ---------------------------------------------------------------------------
 
 device_states = {}
 device_lock = threading.Lock()
@@ -297,9 +330,12 @@ def get_device_state(device_id):
                 "last_approach_spoken": {},
                 "latest_frame":         None,
                 "frame_lock":           threading.Lock(),
-                "tracker":              SimpleTracker(),
                 "mode":                 "yolo",
                 "latest_frame_b64":     None,
+                "frame_count":          0,
+                "depth_map":            None,
+                "_depth_ctr":           0,
+                "last_direction":       {},
             }
             device_states[device_id] = state
             threading.Thread(target=inference_worker, args=(device_id,), daemon=True).start()
@@ -320,11 +356,21 @@ def inference_worker(device_id):
 MONITOR_TIMEOUT = 5  # giây — sau khoảng này coi monitor offline, bỏ qua plot
 
 def _do_inference(device_id, state, frame):
-    frame_width = frame.shape[1]
-    results = model(frame, classes=DANGER_CLASS_IDS, verbose=False, device=INFER_DEVICE)
+    frame_height, frame_width = frame.shape[:2]
+    # BoT-SORT built-in tracking (persist=True giữ trạng thái tracker giữa các frame)
+    results = model.track(frame, classes=DANGER_CLASS_IDS, verbose=False,
+                          device=INFER_DEVICE, persist=True, tracker="botsort.yaml")
     now = time.time()
 
-    # Thu thập tất cả detection nguy hiểm
+    # Chạy depth estimation mỗi DEPTH_INTERVAL inference
+    state["_depth_ctr"] += 1
+    if state["_depth_ctr"] % DEPTH_INTERVAL == 0:
+        try:
+            state["depth_map"] = _estimate_depth(frame)
+        except Exception as e:
+            print(f"[Depth] Lỗi: {e}")
+
+    # Thu thập tất cả detection nguy hiểm (kể cả aux boxes được merge)
     raw_dets = []
     for box in results[0].boxes:
         cls_id = int(box.cls[0])
@@ -333,23 +379,23 @@ def _do_inference(device_id, state, frame):
             continue
         x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
         area = (x2 - x1) * (y2 - y1)
-        raw_dets.append([x1, y1, x2, y2, label, area])
+        # box.id = None nếu tracker chưa assign; -1 nếu là aux box (door/stairs)
+        tid = int(box.id[0]) if box.id is not None else -1
+        raw_dets.append([x1, y1, x2, y2, label, area, tid])
         state["last_seen"][label] = now
 
-    # Gán track ID bền vững
-    tracked = state["tracker"].update(raw_dets)
-    # tracked: [[x1,y1,x2,y2, label, area, track_id], ...]
-
     # Sắp xếp theo priority cao → thấp, rồi area lớn → nhỏ
-    tracked.sort(key=lambda d: (PRIORITY.get(d[4], 0), d[5]), reverse=True)
+    tracked = sorted(raw_dets, key=lambda d: (PRIORITY.get(d[4], 0), d[5]), reverse=True)
 
-    # Cập nhật area_history và dọn entry của track đã hết hạn
+    # Cập nhật area_history chỉ cho box có track ID hợp lệ (>= 0)
     area_history = state["area_history"]
-    alive_tks = {f"t{tid}" for tid in state["tracker"]._tracks}
+    alive_tks = {f"t{d[6]}" for d in tracked if d[6] >= 0}
     for tk in list(area_history.keys()):
         if tk not in alive_tks:
             del area_history[tk]
     for det in tracked:
+        if det[6] < 0:
+            continue  # bỏ qua aux boxes (door/stairs) — không có track ID ổn định
         tk = f"t{det[6]}"
         if tk not in area_history:
             area_history[tk] = deque(maxlen=TRACK_WINDOW)
@@ -358,6 +404,13 @@ def _do_inference(device_id, state, frame):
     last_spoken          = state["last_spoken"]
     last_approach_spoken = state["last_approach_spoken"]
     latest_alert         = state["latest_alert"]
+    last_direction       = state["last_direction"]  # {str(tid): direction}
+
+    # Xóa direction state cho track đã mất
+    alive_tids = {str(d[6]) for d in tracked if d[6] >= 0}
+    for k in list(last_direction.keys()):
+        if k not in alive_tids:
+            del last_direction[k]
 
     # Dọn cooldown hết hạn
     for lbl in list(last_spoken.keys()):
@@ -365,18 +418,23 @@ def _do_inference(device_id, state, frame):
             del last_spoken[lbl]
 
     # --- Kiểm tra vật thể đang tiến lại (ưu tiên cao nhất, 1 cảnh báo) ---
+    # Yêu cầu ít nhất 4/5 frame liên tiếp tăng trưởng >= 5% để tránh jitter YOLO
     approach_fired = False
-    for det in tracked[:3]:
+    for det in tracked:
         x1, y1, x2, y2, label, area, tid = det
         tk   = f"t{tid}"
         hist = area_history.get(tk, deque())
+        if len(hist) < TRACK_WINDOW:
+            continue
+        growth_steps = sum(1 for i in range(len(hist)-1) if hist[i+1] > hist[i] * 1.05)
         is_approaching = (
-            len(hist) == TRACK_WINDOW
-            and hist[-1] > hist[0] * APPROACH_RATIO
-            and hist[-1] > hist[-2]
+            growth_steps >= TRACK_WINDOW - 2          # ít nhất 3/4 hoặc 4/5 frame tăng
+            and hist[-1] > hist[0] * APPROACH_RATIO   # tổng tăng >= 40%
         )
         if is_approaching and now - last_approach_spoken.get(label, 0) > APPROACH_COOLDOWN:
-            direction = get_direction(x1, x2, frame_width)
+            tid_key   = str(tid)
+            direction = get_direction(x1, x2, frame_width, last_direction.get(tid_key))
+            last_direction[tid_key] = direction
             msg       = build_approach_message(label, direction)
             audio_key = f"approach_{label}_{direction.replace(' ', '_')}"
             threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
@@ -389,93 +447,182 @@ def _do_inference(device_id, state, frame):
 
     # --- Dẫn đường liên tục (nav mode) hoặc cảnh báo đa vật thể ---
     if not approach_fired and state.get("nav_mode", False):
-        _nav_guidance(device_id, state, tracked, frame_width, now)
+        _nav_guidance(device_id, state, tracked, frame_width, frame_height, now)
 
-    # --- Cảnh báo đa vật thể (tối đa 2 object hết cooldown) ---
+    # --- Cảnh báo vật thể (1 object, ưu tiên gần nhất) ---
     if not approach_fired and not state.get("nav_mode", False):
-        due_objects = []
+        depth_map = state.get("depth_map")
+
         for det in tracked:
             x1, y1, x2, y2, label, _, tid = det
+            tid_key   = str(tid)
+            direction = get_direction(x1, x2, frame_width, last_direction.get(tid_key))
+            last_direction[tid_key] = direction
+
             if now - last_spoken.get(label, 0) > COOLDOWN:
-                direction = get_direction(x1, x2, frame_width)
-                distance  = get_distance(y1, y2, label)
-                due_objects.append((label, direction, distance))
-                if len(due_objects) >= 2:
-                    break
-
-        if due_objects:
-            msg = build_multi_message(due_objects)
-            if len(due_objects) == 1:
-                label, direction, distance = due_objects[0]
+                distance  = get_distance_with_depth(x1, y1, x2, y2, label, depth_map)
+                msg       = build_message(label, direction, distance)
                 audio_key = f"{label}_{direction.replace(' ', '_')}_{distance.replace(' ', '_')}"
-            else:
-                audio_key = "multi_" + "_".join(d[0] for d in due_objects)
-            threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
-            latest_alert.update({"message": msg, "timestamp": now, "label": audio_key})
-            for label, _, _ in due_objects:
+                threading.Thread(target=generate_audio, args=(audio_key, msg), daemon=True).start()
+                latest_alert.update({"message": msg, "timestamp": now, "label": audio_key})
                 last_spoken[label] = now
-            print(f"[Thiet bi {device_id}] {msg}")
+                print(f"[Thiet bi {device_id}] {msg}")
+                break
 
-    # Chỉ vẽ annotation khi monitor đang xem — tiết kiệm CPU
-    monitor_active = time.time() - state.get("last_monitor_poll", 0) < MONITOR_TIMEOUT
-    if monitor_active:
-        annotated = results[0].plot()
-        h, w = annotated.shape[:2]
-        cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
-        cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
-        cv2.putText(annotated, f"Thiet bi {device_id}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-        _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        with state["frame_lock"]:
-            state["latest_frame"] = buf.tobytes()
-
-def _score_zone(tracked, x_min, x_max):
-    """Tính điểm nguy hiểm của một vùng ngang (dựa vào tâm bounding box)."""
-    score = 0.0
+    # Luôn render annotated frame — phone và monitor đều có thể xem
+    annotated = results[0].plot()
+    h, w = annotated.shape[:2]
+    # Vạch phân chia vùng trái/giữa/phải (khớp ngưỡng 33%/67%)
+    cv2.line(annotated, (w // 3, 0), (w // 3, h), (0, 255, 0), 1)
+    cv2.line(annotated, (2 * w // 3, 0), (2 * w // 3, h), (0, 255, 0), 1)
     for det in tracked:
-        x1, y1, x2, y2, label, *_ = det
-        cx = (x1 + x2) / 2
-        if cx < x_min or cx >= x_max:
-            continue
-        box_h = y2 - y1
-        real_h = KNOWN_HEIGHTS_CM.get(label, 150)
-        dist_cm = (real_h * FOCAL_LENGTH_PX) / box_h if box_h >= 10 else 999
-        if dist_cm < 100:   dist_w = 10
-        elif dist_cm < 200: dist_w = 5
-        elif dist_cm < 300: dist_w = 2
-        else:               dist_w = 0.5
-        score += PRIORITY.get(label, 1) * dist_w
-    return score
+        x1a, y1a, lbl = det[0], det[1], det[4]
+        name = VIET_LABELS.get(lbl, lbl)
+        cv2.putText(annotated, name, (int(x1a), max(16, int(y1a) - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
+    cv2.putText(annotated, f"TB {device_id}", (8, 26),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
+    with state["frame_lock"]:
+        state["latest_frame"] = buf.tobytes()
 
-def _nav_guidance(device_id, state, tracked, frame_width, now):
-    """Phát hướng dẫn đi đường liên tục khi nav_mode bật."""
+def _estimate_depth(frame_bgr):
+    """Trả về depth map float32 cùng kích thước frame. Giá trị = khoảng cách thực (mét)."""
+    h_orig, w_orig = frame_bgr.shape[:2]
+    rgb_origin = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+    # Resize giữ tỉ lệ, fit vào 616×1064 (ViT input size)
+    input_size = (616, 1064)
+    scale = min(input_size[0] / h_orig, input_size[1] / w_orig)
+    rgb = cv2.resize(rgb_origin, (int(w_orig * scale), int(h_orig * scale)),
+                     interpolation=cv2.INTER_LINEAR)
+
+    # Pad về đúng kích thước với giá trị mean
+    h, w = rgb.shape[:2]
+    pad_h, pad_w   = input_size[0] - h, input_size[1] - w
+    pad_h_half = pad_h // 2
+    pad_w_half = pad_w // 2
+    rgb = cv2.copyMakeBorder(rgb, pad_h_half, pad_h - pad_h_half,
+                             pad_w_half, pad_w - pad_w_half,
+                             cv2.BORDER_CONSTANT, value=[123.675, 116.28, 103.53])
+    pad_info = [pad_h_half, pad_h - pad_h_half, pad_w_half, pad_w - pad_w_half]
+
+    # Normalize và chuyển thành tensor
+    mean = torch.tensor([123.675, 116.28, 103.53]).float()[:, None, None]
+    std  = torch.tensor([58.395, 57.12, 57.375]).float()[:, None, None]
+    rgb_t = torch.from_numpy(rgb.transpose((2, 0, 1))).float()
+    rgb_t = (rgb_t - mean) / std
+    rgb_t = rgb_t[None].to(_depth_device)
+
+    with _depth_lock:
+        with torch.no_grad():
+            pred_depth, _, _ = _depth_model.inference({"input": rgb_t})
+        if _depth_device == "cuda":
+            torch.cuda.empty_cache()
+
+    # Xóa padding
+    pred_depth = pred_depth.squeeze()
+    pred_depth = pred_depth[pad_info[0]: pred_depth.shape[0] - pad_info[1],
+                             pad_info[2]: pred_depth.shape[1] - pad_info[3]]
+
+    # Upsample về kích thước gốc
+    pred_depth = torch.nn.functional.interpolate(
+        pred_depth[None, None], (h_orig, w_orig), mode="bilinear", align_corners=False
+    ).squeeze()
+
+    # Canonical camera space → metric (mét): nhân focal đã scale theo resize (theo example chính thức)
+    pred_depth = pred_depth * (FOCAL_LENGTH_PX * scale / 1000.0)
+    pred_depth = torch.clamp(pred_depth, 0, 50)
+
+    return pred_depth.cpu().numpy().astype(np.float32)
+
+def _vfh_nav(tracked, depth_map, frame_w, frame_h):
+    """
+    Vector Field Histogram+ (VFH+): xây polar histogram 180° phía trước,
+    tìm valley (vùng trống) gần hướng thẳng nhất.
+    Trả về (nav_key, urgency).
+    """
+    HIST_BINS  = 36          # 5° mỗi bin → tổng 180°
+    SECTOR_DEG = 180.0 / HIST_BINS
+    histogram  = np.zeros(HIST_BINS, dtype=np.float32)
+
+    for det in tracked:
+        x1, y1, x2, y2, label = det[0], det[1], det[2], det[3], det[4]
+        cx = (x1 + x2) / 2
+
+        if depth_map is not None:
+            px     = min(frame_w - 1, max(0, int(cx)))
+            py     = min(frame_h - 1, max(0, int((y1 + y2) / 2)))
+            dist_m = max(0.1, float(depth_map[py, px]))   # mét thực
+        else:
+            box_h  = max(y2 - y1, 1)
+            real_h = KNOWN_HEIGHTS_CM.get(label, 150)
+            dist_m = max(0.1, (real_h * FOCAL_LENGTH_PX) / (box_h * 100.0))
+
+        proximity = max(0.0, (5.0 - min(dist_m, 5.0)) / 5.0)  # 1=0m, 0=5m+
+        prio      = PRIORITY.get(label, 1)
+        magnitude = prio * (proximity ** 2) * 10.0              # phi tuyến
+
+        # Góc nằm ngang của vật so với trung tâm frame (−90° trái, 0° thẳng, +90° phải)
+        angle_deg  = math.degrees(math.atan2(cx - frame_w / 2, frame_h * 0.6))
+        angle_deg  = max(-90.0, min(90.0, angle_deg))
+        half_w_deg = math.degrees(math.atan2((x2 - x1) / 2, frame_h * 0.6))
+
+        bin_ctr = int((angle_deg + 90.0) / SECTOR_DEG)
+        spread  = max(1, int(half_w_deg / SECTOR_DEG) + 1)
+        for b in range(max(0, bin_ctr - spread), min(HIST_BINS, bin_ctr + spread + 1)):
+            histogram[b] += magnitude
+
+    # Làm trơn histogram (3-bin moving average — bước chuẩn của VFH+)
+    hist_s = np.convolve(histogram, np.ones(3) / 3, mode="same")
+
+    urgency    = float(hist_s.max()) if hist_s.max() > 0 else 0.0
+    CENTER_BIN = HIST_BINS // 2   # bin 18 = 0° = thẳng
+
+    if urgency < 1.0:
+        return "nav_straight", urgency
+
+    # Tìm các valley (bin liên tiếp dưới ngưỡng)
+    THRESHOLD   = 2.5
+    valleys, in_valley, v_start = [], False, 0
+    for i, h in enumerate(hist_s):
+        if h < THRESHOLD and not in_valley:
+            in_valley, v_start = True, i
+        elif h >= THRESHOLD and in_valley:
+            in_valley = False
+            valleys.append((v_start, i - 1))
+    if in_valley:
+        valleys.append((v_start, HIST_BINS - 1))
+
+    if not valleys:
+        return "nav_blocked", urgency
+
+    # Chọn valley gần hướng thẳng nhất
+    best_v   = min(valleys, key=lambda v: abs((v[0] + v[1]) // 2 - CENTER_BIN))
+    best_deg = (best_v[0] + best_v[1]) / 2 * SECTOR_DEG - 90.0
+
+    ANGLE_TOL = 15.0   # ° — trong khoảng này vẫn coi là thẳng
+    if best_deg < -ANGLE_TOL:
+        return "nav_turn_left", urgency
+    elif best_deg > ANGLE_TOL:
+        return "nav_turn_right", urgency
+    elif urgency > 6.0:
+        return "nav_caution", urgency
+    else:
+        return "nav_straight", urgency
+
+
+def _nav_guidance(device_id, state, tracked, frame_width, frame_height, now):
+    """Dẫn đường bằng VFH+ (Vector Field Histogram+) + Metric3Dv2."""
     if not state.get("nav_mode", False):
         return
     if now - state.get("last_nav_spoken", 0) < NAV_COOLDOWN:
         return
 
-    w3 = frame_width / 3
-    left_score   = _score_zone(tracked, 0,       w3)
-    center_score = _score_zone(tracked, w3,       2 * w3)
-    right_score  = _score_zone(tracked, 2 * w3,  frame_width)
-
-    center_clear = center_score < NAV_DANGER_THRESHOLD
-    left_clear   = left_score   < NAV_DANGER_THRESHOLD
-    right_clear  = right_score  < NAV_DANGER_THRESHOLD
-
-    if center_clear:
-        key = "nav_straight"
-    elif left_clear and right_clear:
-        key = "nav_turn_left" if left_score <= right_score else "nav_turn_right"
-    elif left_clear:
-        key = "nav_turn_left"
-    elif right_clear:
-        key = "nav_turn_right"
-    else:
-        key = "nav_blocked"
+    depth_map    = state.get("depth_map")
+    key, urgency = _vfh_nav(tracked, depth_map, frame_width, frame_height)
 
     msg = NAV_MESSAGES[key]
-    # Lặp lại cùng thông điệp chỉ sau NAV_REPEAT_COOLDOWN
     if msg == state.get("last_nav_message", "") and \
        now - state.get("last_nav_spoken", 0) < NAV_REPEAT_COOLDOWN:
         return
@@ -484,13 +631,16 @@ def _nav_guidance(device_id, state, tracked, frame_width, now):
     state["latest_alert"].update({"message": msg, "timestamp": now, "label": key})
     state["last_nav_spoken"]  = now
     state["last_nav_message"] = msg
-    print(f"[NAV device {device_id}] {msg}")
+    print(f"[NAV device {device_id}] {msg} (urgency={urgency:.1f})")
 
-def get_direction(x1, x2, frame_width):
+def get_direction(x1, x2, frame_width, prev=None):
     ratio = ((x1 + x2) / 2) / frame_width
-    if ratio < 0.35:   return "bên trái"
-    elif ratio > 0.65: return "bên phải"
-    else:              return "phía trước"
+    # Hysteresis: ổn định hướng, tránh dao động ở biên
+    if prev == "bên trái"  and ratio < 0.42: return "bên trái"
+    if prev == "bên phải" and ratio > 0.58: return "bên phải"
+    if ratio < 0.33: return "bên trái"
+    if ratio > 0.67: return "bên phải"
+    return "phía trước"
 
 def get_distance(y1, y2, label):
     """Ước lượng khoảng cách thực tế dựa vào chiều cao bounding box."""
@@ -499,10 +649,33 @@ def get_distance(y1, y2, label):
         return ""
     real_h  = KNOWN_HEIGHTS_CM.get(label, 150)
     dist_cm = (real_h * FOCAL_LENGTH_PX) / box_h
-    if dist_cm < 100:   return "dưới 1 mét"
-    elif dist_cm < 200: return "khoảng 1 mét"
-    elif dist_cm < 300: return "khoảng 2 mét"
+    if dist_cm < 150:   return "rất gần"
+    elif dist_cm < 250: return "khoảng 2 mét"
+    elif dist_cm < 400: return "khoảng 3 mét"
+    elif dist_cm < 600: return "khoảng 5 mét"
     else:               return ""
+
+def _sample_depth(depth_map, cx, cy, patch=20):
+    """Lấy median vùng patch để tránh nhiễu pixel đơn."""
+    h, w = depth_map.shape
+    y1, y2 = max(0, cy - patch // 2), min(h, cy + patch // 2)
+    x1, x2 = max(0, cx - patch // 2), min(w, cx + patch // 2)
+    roi = depth_map[y1:y2, x1:x2].flatten()
+    valid = roi[(roi > 0.05) & (roi < 40.0)]
+    return float(np.median(valid)) if len(valid) >= 4 else float(depth_map[cy, cx])
+
+def get_distance_with_depth(x1, y1, x2, y2, label, depth_map):
+    """Ước lượng khoảng cách: dùng metric depth (mét) từ Metric3Dv2, fallback về focal length."""
+    if depth_map is not None:
+        cx = min(depth_map.shape[1]-1, max(0, int((x1+x2)/2)))
+        cy = min(depth_map.shape[0]-1, max(0, int((y1+y2)/2)))
+        d = _sample_depth(depth_map, cx, cy)
+        if   d < 1.5: return "rất gần"
+        elif d < 2.5: return "khoảng 2 mét"
+        elif d < 4.0: return "khoảng 3 mét"
+        elif d < 6.0: return "khoảng 5 mét"
+        else:         return ""
+    return get_distance(y1, y2, label)
 
 def get_traffic_light_color(frame, box):
     x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
@@ -616,6 +789,11 @@ def process_frame():
     if state.get("mode") == "ai":
         return jsonify(state["latest_alert"])
 
+    # Frame skip — chỉ inference mỗi FRAME_SKIP frame, trả kết quả cache cho frame bị bỏ
+    state["frame_count"] += 1
+    if state["frame_count"] % FRAME_SKIP != 0:
+        return jsonify(state["latest_alert"])
+
     img_data = base64.b64decode(data['image'].split(',')[1])
     nparr = np.frombuffer(img_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -705,13 +883,16 @@ def ai_query():
 
     try:
         response_text = query_ai(image_b64, user_text)
-    except http_requests.exceptions.ConnectionError:
-        return jsonify({"error": "Không kết nối được Ollama. Hãy chạy: ollama serve"}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    print(f"[AI] response_text={response_text!r}")
+    if not response_text:
+        return jsonify({"error": "AI trả về rỗng"}), 500
+
     tts_key   = "ai_" + hashlib.md5(response_text.encode()).hexdigest()[:8]
     audio_b64 = tts_sync(response_text, tts_key)
+    print(f"[AI] tts done, audio_b64 len={len(audio_b64)}")
 
     now = time.time()
     state["latest_alert"].update({"message": response_text, "timestamp": now, "label": tts_key})
@@ -722,11 +903,16 @@ def transcribe():
     audio_file = request.files.get("audio")
     if not audio_file:
         return jsonify({"error": "No audio"}), 400
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+    ext = os.path.splitext(audio_file.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
         audio_file.save(f.name)
         tmp_path = f.name
     try:
-        segments, _ = whisper_model.transcribe(tmp_path, language="vi")
+        segments, _ = whisper_model.transcribe(
+            tmp_path, language="vi",
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 400},
+        )
         text = " ".join(s.text for s in segments).strip()
         return jsonify({"text": text})
     finally:
@@ -754,16 +940,59 @@ def make_placeholder(device_id):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 80), 1)
     return img
 
+def _ensure_cert(cert_path="cert.pem", key_path="key.pem"):
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        return cert_path, key_path
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime, ipaddress
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"SmartEyes")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject).issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+            .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650))
+            .add_extension(x509.SubjectAlternativeName([
+                x509.DNSName(u"localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+            ]), critical=False)
+            .sign(key, hashes.SHA256())
+        )
+        with open(key_path, "wb") as f:
+            f.write(key.private_bytes(serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption()))
+        with open(cert_path, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+        print(f"[SSL] Da tao cert moi: {cert_path}")
+        return cert_path, key_path
+    except ImportError:
+        print("[SSL] Thieu cryptography, dung adhoc cert")
+        return None, None
+
 if __name__ == "__main__":
-    import shutil
+    import sys, shutil
+    use_ssl = "--no-ssl" not in sys.argv
     shutil.rmtree("audio", ignore_errors=True)
     os.makedirs("audio", exist_ok=True)
     print("[Audio] Dang tao truoc tat ca audio clips (edge-tts)...")
     pregenerate_audio()
-    print("Server chay tai: https://192.168.62.197:5000")
+    scheme = "https" if use_ssl else "http"
+    print(f"Server chay tai: {scheme}://192.168.62.197:5000")
     print("Dien thoai 1: /phone?id=1")
     print("Dien thoai 2: /phone?id=2")
     print("Dien thoai 3: /phone?id=3")
     print("Monitor:      /monitor")
-    threading.Timer(1.5, lambda: webbrowser.open("https://127.0.0.1:5000/monitor")).start()
-    app.run(host="0.0.0.0", port=5000, ssl_context='adhoc', use_reloader=False)
+    threading.Timer(1.5, lambda: webbrowser.open(f"{scheme}://127.0.0.1:5000/monitor")).start()
+    if use_ssl:
+        cert_f, key_f = _ensure_cert()
+        ssl_ctx = (cert_f, key_f) if cert_f else 'adhoc'
+    else:
+        ssl_ctx = None
+    app.run(host="0.0.0.0", port=5000, ssl_context=ssl_ctx, use_reloader=False)
