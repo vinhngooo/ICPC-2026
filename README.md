@@ -61,22 +61,28 @@ Do đặc thù các trình duyệt di động hiện nay bắt buộc phải có
 # 1. Chuẩn bị môi trường và cài đặt
 Yêu cầu hệ thống cài đặt sẵn Python 3.9 trở lên (Khuyến khích máy có card đồ họa NVIDIA để chạy mượt mà Metric3D và Whisper).
 - Cài đặt các gói thư viện phụ thuộc:
+```text
 pip install flask flask-cors ultralytics faster-whisper edge-tts opencv-python numpy torch cryptography requests cv2
+```
 (Lưu ý: Đảm bảo bạn đã đặt các file trọng số bổ sung doors.pt và stairs.pt ở cùng thư mục chạy script nếu cần nhận diện nâng cao.)
 # 2. Khởi chạy Local Server
 Hệ thống tích hợp sẵn cơ chế tự động tạo chứng chỉ SSL nội bộ (cert.pem, key.pem). Chạy lệnh sau để khởi động server:
+```text
 python app.py
+```
 (Server sẽ chạy mặc định tại cổng 5000. Hãy ghi lại địa chỉ IP Local hiển thị trên terminal (Ví dụ: https://192.168.62.197:5000).)
 # 3. Cấu hình Đường hầm HTTPS với Ngrok
 Mở một terminal mới và chạy lệnh Ngrok để trỏ thẳng vào cổng Flask đang chạy dưới giao thức HTTPS:
+```text
 ngrok http https://localhost:5000
+```
 (Nếu bạn cấu hình chạy server không có SSL bằng cờ --no-ssl, hãy dùng lệnh: ngrok http 5000)
 # 4. Kết nối Thiết bị
 - Dành cho Người dùng (Điện thoại): Sử dụng điện thoại quét mã hoặc truy cập trực tiếp link Ngrok kèm ID thiết bị để vào giao diện camera:
-  Thiết bị 1: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=1
-  Thiết bị 2: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=2
+  - Thiết bị 1: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=1
+  - Thiết bị 2: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=2
 - Dành cho Giám sát viên (PC/Laptop): Truy cập link sau trên máy tính để xem màn hình điều khiển trung tâm và camera trực quan:
-  Giao diện Monitor: https://xxxx-xxx-xxx.ngrok-free.app/monitor
+  - Giao diện Monitor: https://xxxx-xxx-xxx.ngrok-free.app/monitor
 
 
 
