@@ -45,6 +45,7 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
 
 
 # 📌 Mô hình và thư viện
+```text
 Tên Mô Hình / Thuật Toán|	Vai Trò Trong Hệ Thống|	Thư Viện Chính|	Ghi Chú
 YOLOv11 Nano (yolo11n.pt)|	Phát hiện vật cản nền tảng (80 lớp COCO)|	ultralytics|	Tối ưu hóa tốc độ chạy trên CPU/GPU onboard
 Custom YOLO Ensembles|	Phát hiện chuyên biệt doors.pt và stairs.pt|	torch, ultralytics|	Merge Tensor song song với luồng chính (_merge_boxes)
@@ -54,7 +55,7 @@ VFH+ (Vector Field Histogram+)|	Xây dựng biểu đồ phân vùng 180° và t
 Faster-Whisper (small)|	Nhận diện giọng nói local độ chính xác cao|	faster-whisper|	Tích hợp bộ lọc VAD (Voice Activity Detection)
 Edge-TTS (vi-VN-HoaiMyNeural)|	Tổng hợp tiếng nói cảnh báo tiếng Việt tự nhiên|	edge_tts, asyncio|	Tăng tốc độ đọc rate=+15%, có cơ chế tạo trước âm thanh (pregenerate_audio)
 VLM (OpenRouter API)|	Phân tích ngữ cảnh sâu thông qua mô hình thị giác|	requests|	Chiến lược fallback luân phiên: Llama-4-Scout / Nemotron-12b
-
+```
 
 # 📌 Hướng Dẫn Tiếp Cận & Triển Khai
 Do đặc thù các trình duyệt di động hiện nay bắt buộc phải có kết nối HTTPS bảo mật thì mới cho phép kích hoạt Camera (getUserMedia), chúng ta sẽ sử dụng Ngrok để tạo một đường hầm bảo mật từ Laptop ra Internet cho điện thoại kết nối.
