@@ -45,7 +45,7 @@ Việc di chuyển và định hướng trong không gian kín như lớp học 
 
 
 # 📌 Mô hình và thư viện
-```text
+```markdown
 Tên Mô Hình / Thuật Toán|	Vai Trò Trong Hệ Thống|	Thư Viện Chính|	Ghi Chú
 YOLOv11 Nano (yolo11n.pt)|	Phát hiện vật cản nền tảng (80 lớp COCO)|	ultralytics|	Tối ưu hóa tốc độ chạy trên CPU/GPU onboard
 Custom YOLO Ensembles|	Phát hiện chuyên biệt doors.pt và stairs.pt|	torch, ultralytics|	Merge Tensor song song với luồng chính (_merge_boxes)
