@@ -71,15 +71,18 @@ pip install flask flask-cors ultralytics opencv-python numpy torch cryptography 
 Tạo một file .env ở thư mục gốc và điền các thông tin sau:
 
 Đoạn mã
-# API Key để dùng tính năng Hỏi đáp AI (Vision LLM)
+API Key để dùng tính năng Hỏi đáp AI (Vision LLM)
+```bash
 OPENROUTER_API_KEY=your_openrouter_key_here
-
-# Cấu hình Email gửi thông báo SOS (Tùy chọn)
+```
+Cấu hình Email gửi thông báo SOS (Tùy chọn)
+```bash
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_16_char_app_password
 SOS_EMAIL_TO=relative_email@gmail.com
+```
 ### 3. Khởi Chạy Server
 Khởi động hệ thống trên máy tính:
 Bash
