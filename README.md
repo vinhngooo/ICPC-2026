@@ -1,96 +1,99 @@
-# SmartEyes-AIOT
+# SmartEye - AIoT System
 
 [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org)
-[![Framework](https://img.shields.io/badge/framework-Flask%20%2F%20FastAPI-green.svg)](https://flask.palletsprojects.com/)
+[![Framework](https://img.shields.io/badge/framework-Flask-green.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 
-Hệ thống AIoT hỗ trợ người khiếm thị bằng công nghệ nhận diện vật thể và cảnh báo bằng giọng nói.
+Hệ thống AIoT "Mắt thần" hỗ trợ người khiếm thị bằng công nghệ nhận diện vật thể, ước lượng khoảng cách và cảnh báo bằng giọng nói.
 
-
-**smartEyes-AI** là một hệ thống trí tuệ nhân tạo ứng dụng mô hình điện toán biên (Edge Computing) tận dụng tối đa phần cứng sẵn có. Hệ thống biến bất kỳ chiếc điện thoại thông minh nào thành "mắt và tai" (thu thập dữ liệu hình ảnh, âm thanh) và sử dụng máy tính cá nhân làm "bộ não" trung tâm để xử lý AI theo thời gian thực thông qua nền tảng Web Application.
+*SmartEye* ứng dụng mô hình điện toán biên (Edge Computing). Hệ thống sử dụng điện thoại thông minh làm thiết bị thu thập hình ảnh/nhận lệnh giọng nói/phát âm thanh, và sử dụng máy tính cá nhân (Server Local) làm "bộ não" trung tâm xử lý AI theo thời gian thực.
 
 ---
 
 ## 📌 Tóm Tắt Dự Án (Project Abstract)
 
-Việc di chuyển và định hướng trong không gian kín như lớp học đối với robot tự hành hoặc người khiếm thị đòi hỏi một hệ thống nhận diện vật cản nhanh và chính xác. **smartEYE-AI** thu hẹp phạm vi hoạt động chuyên biệt trong **môi trường lớp học** với các mục tiêu cốt lõi:
-* **Đối tượng nhận diện chính (YOLOv8):** Tập trung học và phát hiện chính xác 4 yếu tố môi trường bao gồm: **Con người (Human)**, **Bàn học (Desk)**, **Bậc thang (Stairs)**, **Cánh cửa (Door)**, **Tường (Wall)**, và **Đường thẳng/Vạch kẻ đường (Lines)** để xác định lối đi an toàn.
-* **Cơ chế hoạt động:**
-    * Camera điện thoại stream luồng video thời gian thực lên Server Flask/FastAPI trên laptop thông qua giao thức WebSocket (độ trễ thấp).
-    * Laptop chạy mô hình **YOLOv8 (Ultralytics)** để bounding box vật cản và tính toán khoảng cách/nguy cơ va chạm.
-    * Nếu phát hiện vật cản quá gần hoặc lệch khỏi đường thẳng an toàn, server lập tức gửi tín hiệu hạ lệnh cho điện thoại phát âm thanh cảnh báo (ví dụ: *"Chú ý có bàn phía trước"*, *"Chuẩn bị tới bậc thang"*).
+Hệ thống được thiết kế để hỗ trợ định hướng và nhận biết môi trường xung quanh cho người khiếm thị. Phiên bản *SmartEye Pro* tập trung vào hiệu năng thực dụng, đẩy các tác vụ nặng về phía Server và tối ưu hóa phía Client (điện thoại).
+
+* *Kiến trúc phân tán:*
+    * *Frontend (Mobile/Trình duyệt):* Chịu trách nhiệm hoàn toàn về luồng thu thập ảnh (Camera), xử lý âm thanh (Web Speech API để đọc cảnh báo và nhận diện giọng nói tiếng Việt), và kích hoạt rung/SOS.
+    * *Backend (Laptop/PC):* Xử lý hình ảnh gửi lên qua HTTP POST (Base64). Sử dụng các mô hình AI để nhận diện vật thể, đo độ sâu, đọc chữ, tính toán đường đi và trả về văn bản cảnh báo.
+* *Tối ưu hóa phần cứng:*
+    * *Các thành phần nặng (Metric3D, EasyOCR, AI Vision) được thiết kế suy biến mượt mà (Graceful Degradation) – nếu máy tính không đủ phần cứng hoặc thiếu cấu hình, hệ thống vẫn hoạt động trơn tru dựa trên cốt lõi YOLO.
+
 ---
 
-## ⚙️ Kiến Trúc Hệ Thống (System Architecture)
-```text
-[ Smartphone: Eye/Ear ] --(Stream Video Frames qua WebSockets)--> [ Laptop Server: Brain ]
-           ▲                                                                 │
-           └──────────────────(Hạ lệnh phát Audio Cảnh báo)──────────────────┘
+## ⚙️ Tính Năng Nổi Bật
+
+### 1. Chế độ Di chuyển & Cảnh báo (YOLO + Depth Navigation)
+* *Nhận diện & Bám đuổi đa mô hình:* Kết hợp YOLO11n (COCO classes), mô hình Custom (Cửa, Cầu thang) và YOLO-World (Phát hiện Quạt điện). Sử dụng BoT-SORT để theo dõi quỹ đạo.
+* *Cảnh báo tiến lại gần (Approach Warning):* Sử dụng lịch sử bản đồ độ sâu (Depth Map) hoặc biến thiên diện tích Bounding Box để phát hiện vật thể đang tiến lại gần (nguy cơ va chạm cao) và phát cảnh báo lập tức.
+* *Dẫn đường tự do (Free-space Navigation):* Chia trường nhìn (FOV) thành 9 cột dựa trên bản đồ độ sâu từ Metric3Dv2. Đánh giá độ thoáng để đưa ra chỉ dẫn (Rẽ trái, Rẽ phải, Đi thẳng, Dừng lại).
+* *Dẫn đường tới mục tiêu (Homing):* Người dùng có thể ra lệnh (VD: "Đưa tôi tới cái ghế"). Hệ thống sẽ khóa mục tiêu và chỉ đường chi tiết liên tục cho đến khi tiếp cận.
+
+### 2. Chế độ Trợ lý Không gian (Vision AI & OCR)
+* *Hỏi đáp bối cảnh:* Người dùng đặt câu hỏi bằng giọng nói, hệ thống chụp khung hình gửi lên các Mô hình Ngôn ngữ Lớn thị giác (Vision LLM qua OpenRouter API) để phân tích chi tiết môi trường trước mặt.
+* *Đọc văn bản ngoại tuyến (Offline OCR):* Tích hợp EasyOCR để trích xuất văn bản từ hình ảnh biển báo, tài liệu, nhãn chai lọ,... mà không cần kết nối internet.
+
+### 3. Tính năng An toàn (SOS)
+* Gửi tín hiệu cấp cứu kèm Tọa độ GPS, đường dẫn Google Maps và độ sai số hiện tại.
+* Tự động gửi Email thông báo khẩn cấp tới người thân (thông qua giao thức SMTP backend).
+
 ---
 
-1.  **Frontend (Mobile Web):** HTML5 Camera API (`getUserMedia`), Socket.io-client gửi frame ảnh dạng Base64/Binary, Web Audio API đảm nhận phát âm thanh cảnh báo.
-2.  **Backend (Laptop):** Python, Flask-SocketIO nhận diện luồng ảnh liên tục, chuyển đổi sang định dạng OpenCV.
-3.  **AI Core:** Thư viện `ultralytics` chạy mô hình **YOLOv8** (sử dụng phiên bản `yolov8n.pt` - Nano để tối ưu hóa tốc độ trên laptop cá nhân không có GPU rời).
-```
-## 📌 Tính năng (2 chế độ)
-# 1. Chế độ cảnh báo
--  Nhận diện & Bám đuổi: Sử dụng Tracker BoT-SORT để theo dõi quỹ đạo di chuyển của vật thể, phân loại mức độ ưu tiên nguy hiểm (Xe cộ, Con người > Bàn ghế > Cửa, Cầu thang).
--  Cảnh báo va chạm chủ động: Theo dõi biến thiên diện tích Bounding Box (APPROACH_RATIO = 1.40). Nếu phát hiện vật thể tăng kích thước nhanh trong $4/5$ khung hình liên tiếp, hệ thống lập tức phát cảnh báo vật thể đang tiến lại gần.
--  Dẫn đường thông minh (VFH+ Mode): Khi kích hoạt, hệ thống sẽ chuyển sang chế độ phân tích không gian số để tìm lối đi an toàn nhất.
+## 📌 Các Mô Hình & Thư Viện Cốt Lõi
 
-# 2. Chế độ an toàn
--  Chuyển đổi linh hoạt: Phục vụ trong không gian tĩnh (trong nhà, cửa hàng) khi người dùng cần tương tác sâu với môi trường xung quanh.
--  Hỏi đáp không gian: Người dùng gửi câu lệnh bằng giọng nói, hệ thống sử dụng Faster-Whisper để dịch văn bản, chụp khung hình hiện tại và gửi tới các Mô hình ngôn ngữ lớn thị giác (VLM) để phân tích chi tiết vật thể, đọc văn bản hoặc tìm đồ vật theo yêu cầu.
-
-
-
-# 📌 Mô hình và thư viện
-
-|Tên Mô Hình / Thuật Toán|	Vai Trò Trong Hệ Thống|	Thư Viện Chính|	Ghi Chú|
+| Tên Mô Hình / Thuật Toán | Vai Trò Trong Hệ Thống | Thư Viện / API | Ghi Chú |
 | ------------- | ------------- | ------------- | ------------- |
-|YOLOv11 Nano (yolo11n.pt)|	Phát hiện vật cản nền tảng (80 lớp COCO)|	ultralytics|	Tối ưu hóa tốc độ chạy trên CPU/GPU onboard|
-|Custom YOLO Ensembles|	Phát hiện chuyên biệt doors.pt và stairs.pt|	torch, ultralytics|	Merge Tensor song song với luồng chính (_merge_boxes)|
-|BoT-SORT Tracker|	Định danh vật thể và tính toán vector chuyển động|	ultralytics|	Duy trì ID vật thể qua các khung hình (persist=True)|
-|Metric3Dv2 (metric3d_vit_small)|	Ước lượng bản đồ chiều sâu đơn nhãn (Metric Depth)|	torch.hub|	Tính khoảng cách vật lý thực tế bằng mét nhờ focal length PX|
-|VFH+ (Vector Field Histogram+)|	Xây dựng biểu đồ phân vùng 180° và tìm lối đi an toàn|	numpy, math|	Thuật toán tránh vật cản tự hành phân chia thành 36 bins|
-|Faster-Whisper (small)|	Nhận diện giọng nói local độ chính xác cao|	faster-whisper|	Tích hợp bộ lọc VAD (Voice Activity Detection)|
-|Edge-TTS (vi-VN-HoaiMyNeural)|	Tổng hợp tiếng nói cảnh báo tiếng Việt tự nhiên|	edge_tts, asyncio|	Tăng tốc độ đọc rate=+15%, có cơ chế tạo trước âm thanh (pregenerate_audio)|
-|VLM (OpenRouter API)|	Phân tích ngữ cảnh sâu thông qua mô hình thị giác|	requests|	Chiến lược fallback luân phiên: Llama-4-Scout / Nemotron-12b|
+| *YOLO11 Nano* (yolo11n.pt) | Nhận diện vật cản nền tảng (người, xe cộ, bàn ghế...) | ultralytics | Tối ưu hóa tốc độ chạy trên CPU/GPU onboard |
+| *Custom YOLO & YOLO-World* | Phát hiện chuyên biệt: Cửa, Cầu thang, Quạt điện | ultralytics, torch | Có cơ chế bỏ phiếu (voting) để chống nhấp nháy tín hiệu |
+| *BoT-SORT Tracker* | Định danh vật thể và duy trì ID qua các khung hình | ultralytics | persist=True |
+| *Metric3Dv2* (metric3d_vit_small) | Ước lượng bản đồ chiều sâu đơn nhãn (Metric Depth) | torch.hub | Trích xuất độ sâu vật lý (mét) để tính toán va chạm |
+| *EasyOCR* | Trích xuất và đọc văn bản (Tiếng Việt + Tiếng Anh) | easyocr, cv2 | Xử lý hoàn toàn Local (Offline) |
+| *Vision LLM* (Llama-4/Nemotron) | Phân tích ngữ cảnh sâu và trả lời câu hỏi phức tạp | requests | Gọi qua OpenRouter API (Chiến lược fallback luân phiên) |
+| *Web Speech API* | Text-to-Speech & Speech-to-Text | Native Browser API | Chạy phía Client, loại bỏ gánh nặng cho Server |
 
+---
 
-# 📌 Hướng Dẫn Tiếp Cận & Triển Khai
-Do đặc thù các trình duyệt di động hiện nay bắt buộc phải có kết nối HTTPS bảo mật thì mới cho phép kích hoạt Camera (getUserMedia), chúng ta sẽ sử dụng Ngrok để tạo một đường hầm bảo mật từ Laptop ra Internet cho điện thoại kết nối.
-# 1. Chuẩn bị môi trường và cài đặt
-Yêu cầu hệ thống cài đặt sẵn Python 3.9 trở lên (Khuyến khích máy có card đồ họa NVIDIA để chạy mượt mà Metric3D và Whisper).
-- Cài đặt các gói thư viện phụ thuộc:
-```text
-pip install flask flask-cors ultralytics faster-whisper edge-tts opencv-python numpy torch cryptography requests cv2
+## 🚀 Hướng Dẫn Cài Đặt & Triển Khai
+
+Hệ thống tích hợp sẵn cơ chế tự tạo chứng chỉ SSL (cryptography) để cho phép trình duyệt di động truy cập Camera qua mạng LAN (HTTPS) mà không cần bắt buộc dùng Ngrok.
+
+### 1. Chuẩn Bị Môi Trường
+Yêu cầu hệ thống cài đặt sẵn *Python 3.9+* (Khuyến khích máy có card đồ họa NVIDIA để chạy mượt mà Metric3D và EasyOCR).
+
+Cài đặt các thư viện phụ thuộc:
+```bash
+pip install flask flask-cors ultralytics opencv-python numpy torch cryptography requests easyocr python-dotenv
 ```
-(Lưu ý: Đảm bảo bạn đã đặt các file trọng số bổ sung doors.pt và stairs.pt ở cùng thư mục chạy script nếu cần nhận diện nâng cao.)
-# 2. Khởi chạy Local Server
-Hệ thống tích hợp sẵn cơ chế tự động tạo chứng chỉ SSL nội bộ (cert.pem, key.pem). Chạy lệnh sau để khởi động server:
-```text
+(Đảm bảo bạn đã đặt các file trọng số doors.pt và stairs.pt ở cùng thư mục chứa source code)
+
+### 2. Thiết Lập File Môi Trường (.env)
+Tạo một file .env ở thư mục gốc và điền các thông tin sau:
+
+Đoạn mã
+# API Key để dùng tính năng Hỏi đáp AI (Vision LLM)
+OPENROUTER_API_KEY=your_openrouter_key_here
+
+# Cấu hình Email gửi thông báo SOS (Tùy chọn)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_16_char_app_password
+SOS_EMAIL_TO=relative_email@gmail.com
+### 3. Khởi Chạy Server
+Khởi động hệ thống trên máy tính:
+Bash
 python app.py
-```
-(Server sẽ chạy mặc định tại cổng 5000. Hãy ghi lại địa chỉ IP Local hiển thị trên terminal (Ví dụ: https://192.168.62.197:5000).)
-# 3. Cấu hình Đường hầm HTTPS với Ngrok
-Mở một terminal mới và chạy lệnh Ngrok để trỏ thẳng vào cổng Flask đang chạy dưới giao thức HTTPS:
-```text
-ngrok http https://localhost:5000
-```
-(Nếu bạn cấu hình chạy server không có SSL bằng cờ --no-ssl, hãy dùng lệnh: ngrok http 5000)
-# 4. Kết nối Thiết bị
-- Dành cho Người dùng (Điện thoại): Sử dụng điện thoại quét mã hoặc truy cập trực tiếp link Ngrok kèm ID thiết bị để vào giao diện camera:
-  - Thiết bị 1: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=1
-  - Thiết bị 2: https://xxxx-xxx-xxx.ngrok-free.app/phone?id=2
-- Dành cho Giám sát viên (PC/Laptop): Truy cập link sau trên máy tính để xem màn hình điều khiển trung tâm và camera trực quan:
-  - Giao diện Monitor: https://xxxx-xxx-xxx.ngrok-free.app/monitor
+Dùng qua mạng LAN (Mặc định có HTTPS): Truy cập theo địa chỉ hiển thị trên terminal (Ví dụ: https://192.168.x.x:5000). Trình duyệt sẽ cảnh báo chứng chỉ tự cấp, bạn chọn "Nâng cao" -> "Vẫn tiếp tục".
 
+Dùng Local trên máy tính: Chạy lệnh python app.py --no-ssl để truy cập qua http://localhost:5000.
 
+### 4. Kết Nối Điện Thoại (Sử Dụng Thực Tế)
+Điện thoại và máy tính phải kết nối cùng một mạng Wi-Fi (hoặc điện thoại phát 4G cho máy tính).
 
-  
-# 📌 Đồng sáng lập
-| **Nguyễn Việt Tiến** |
-**Ngô Quang Vinh** |
-**Nguyễn Hoàng Hải** |
-**Trương Nhật Nam** |
+Dùng điện thoại truy cập vào địa chỉ HTTPS IP của máy tính hiển thị trên Terminal.
+
+Cấp quyền truy cập Camera, Microphone và Vị trí (Location) khi trình duyệt yêu cầu.
+
+## 📌 Đồng sáng lập
+| Nguyễn Việt Tiến | Ngô Quang Vinh | Nguyễn Hoàng Hải | Trương Nhật Nam |
