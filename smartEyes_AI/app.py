@@ -119,6 +119,9 @@ NAV_CLEAR_M = 2.8                # thoang hon -> di thang
 # cot giua gan hon han hai ben va o trong tam voi nhau -> coi nhu co vat truoc mat.
 NAV_REL_M     = 3.5              # chi xet tuong doi khi vat trong khoang nay
 NAV_REL_RATIO = 0.65            # cot giua < 65% do thoang nho nhat cua hai ben
+# Chia khung hinh thanh 3 o theo chieu ngang; chi O GIUA moi la duong di.
+# Chi xet vat can trong dai giua nay, bo qua hai ben (tuong/le duong khong di duoc).
+NAV_PATH_FRAC = 1.0 / 3.0       # ty le be rong "duong di" o chinh giua khung
 
 # --- Dan duong toi muc tieu cu the (homing) ---
 GOAL_ARRIVE_M        = 1.0
@@ -393,9 +396,15 @@ def _depth_nav(depth_map, prev_key=None):
     ngay, khong cho qua nhu truoc.
     """
     H, W = depth_map.shape
+    N = 9
+    # CHI XET O GIUA: cat lay 1/3 chinh giua chieu ngang (duong di that su),
+    # bo qua hai ben vi do la tuong/le khong phai loi di.
+    px = int(W * (1.0 - NAV_PATH_FRAC) / 2.0)
+    if W - 2 * px >= N:
+        depth_map = depth_map[:, px:W - px]
+        H, W = depth_map.shape
     # lay dai giua-duoi khung (noi vat can than the o tam tay/chan xuat hien)
     band = depth_map[int(0.30 * H):int(0.92 * H), :]
-    N = 9
     col_w = max(1, W // N)
     col_min = np.full(N, 30.0, dtype=np.float32)
     for i in range(N):
@@ -447,19 +456,24 @@ def _semantic_nav_fallback(tracked, frame_w):
     if not tracked:
         return "nav_straight", 30.0
     nearest_m = 30.0
-    third = frame_w / 3
+    # CHI XET O GIUA: duong di la dai 1/3 chinh giua khung; bo qua vat hai ben.
+    path_l = frame_w * (1.0 - NAV_PATH_FRAC) / 2.0
+    path_r = frame_w - path_l
+    sub = (path_r - path_l) / 3                # chia nho duong di de biet nen ne trai/phai
     left_block = right_block = center_block = False
     for det in tracked:
         x1, y1, x2, y2, label = det[0], det[1], det[2], det[3], det[4]
+        cx = (x1 + x2) / 2
+        if cx < path_l or cx > path_r:         # ngoai duong di -> khong phai vat can
+            continue
         box_h = max(y2 - y1, 1)
         real_h = KNOWN_HEIGHTS_CM.get(label, 150)
         dist_m = max(0.1, (real_h * FOCAL_LENGTH_PX) / (box_h * 100.0))
-        cx = (x1 + x2) / 2
         nearest_m = min(nearest_m, dist_m)
         if dist_m < NAV_SLOW_M:
-            if cx < third:        left_block = True
-            elif cx > 2 * third:  right_block = True
-            else:                 center_block = True
+            if cx < path_l + sub:      left_block = True
+            elif cx > path_r - sub:    right_block = True
+            else:                      center_block = True
     if not center_block and nearest_m >= NAV_CLEAR_M:
         return "nav_straight", nearest_m
     if center_block and left_block and right_block and nearest_m < NAV_STOP_M:
