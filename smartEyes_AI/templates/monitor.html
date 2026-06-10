@@ -1,344 +1,334 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartEyes — Monitor</title>
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartEye Pro — Giám sát</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b1220; --bg2:#111c30; --card:#16233c; --card2:#1c2c49;
+  --line:#27395c; --accent:#3b82f6; --accent2:#60a5fa;
+  --green:#22c55e; --green-bg:#0f2e1d; --red:#ef4444; --red-bg:#3a1414;
+  --amber:#f59e0b; --text:#f1f5f9; --text-sub:#94a3b8; --radius:16px;
+}
+html,body{height:100%}
+body{font-family:-apple-system,'Segoe UI',Roboto,system-ui,sans-serif;background:var(--bg);
+  color:var(--text);-webkit-font-smoothing:antialiased;min-height:100vh}
 
-        :root {
-            --bg:          #04080f;
-            --surface:     rgba(10, 30, 70, 0.55);
-            --surface-hi:  rgba(14, 40, 90, 0.70);
-            --border:      rgba(59, 130, 246, 0.14);
-            --border-hi:   rgba(59, 130, 246, 0.28);
-            --accent:      #3b82f6;
-            --green:       #34D399;
-            --green-soft:  rgba(52, 211, 153, 0.13);
-            --red:         #F87171;
-            --red-soft:    rgba(248, 113, 113, 0.10);
-            --navy-soft:   rgba(59, 130, 246, 0.12);
-            --text:        #e2e8f0;
-            --text-sub:    #94a3b8;
-            --text-muted:  #3d5a80;
-            --glass:       blur(20px) saturate(150%);
-        }
+/* Top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;
+  border-bottom:1px solid var(--line);background:var(--bg2);position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:19px;letter-spacing:-.4px}
+.brand .eye{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  font-size:19px;background:linear-gradient(135deg,#2563eb,#60a5fa);box-shadow:0 4px 14px rgba(59,130,246,.45)}
+.brand small{font-weight:600;font-size:12px;color:var(--text-sub);letter-spacing:1px;text-transform:uppercase}
+.badges{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.badge{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--text-sub);
+  background:var(--card);border:1px solid var(--line);padding:7px 14px;border-radius:999px}
+.badge .dot{width:9px;height:9px;border-radius:50%;background:#475569;transition:.3s}
+.badge.live .dot{background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
+.badge.off .dot{background:var(--red)}
+.badge.ok{color:#86efac;border-color:rgba(34,197,94,.4)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 
-        html, body {
-            min-height: 100vh;
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
-            -webkit-font-smoothing: antialiased;
-        }
+/* Layout */
+.wrap{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr);gap:18px;padding:18px 24px;
+  max-width:1500px;margin:0 auto}
+@media(max-width:980px){.wrap{grid-template-columns:1fr}}
 
-        /* ── Subtle radial bg glow ── */
-        body::before {
-            content: '';
-            position: fixed;
-            top: -20%; left: 50%;
-            transform: translateX(-50%);
-            width: 80vw; height: 50vh;
-            background: radial-gradient(ellipse, rgba(29,78,216,0.12) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
+/* Camera */
+.stage{position:relative;border-radius:var(--radius);overflow:hidden;background:#000;
+  border:1px solid var(--line);aspect-ratio:16/10;display:flex;align-items:center;justify-content:center}
+#feed{width:100%;height:100%;object-fit:contain;display:block}
+#overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.noSignal{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;color:var(--text-sub);background:rgba(8,14,26,.9)}
+.noSignal .ic{font-size:54px;opacity:.4}
+.noSignal.hide{display:none}
+.cam-tag{position:absolute;left:14px;top:14px;font-size:11px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;color:#cbd5e1;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+  padding:6px 13px;border-radius:999px;border:1px solid rgba(255,255,255,.12)}
+.fps{position:absolute;right:14px;top:14px;font-size:11px;font-weight:700;color:#cbd5e1;
+  background:rgba(0,0,0,.55);padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.12)}
 
-        /* ── Header ── */
-        .header {
-            position: sticky; top: 0; z-index: 30;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 24px;
-            height: 58px;
-            background: rgba(4, 8, 20, 0.92);
-            backdrop-filter: var(--glass);
-            border-bottom: 1px solid var(--border);
-        }
+/* Alert banner under camera */
+.banner{margin-top:16px;background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);
+  padding:18px 20px;transition:.3s;min-height:84px;display:flex;flex-direction:column;justify-content:center}
+.banner.warn{background:var(--red-bg);border-color:var(--red)}
+.banner.safe{background:var(--green-bg);border-color:rgba(34,197,94,.5)}
+.banner .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.banner .tag{font-size:11px;font-weight:700;letter-spacing:1.3px;text-transform:uppercase;color:var(--accent2)}
+.banner.warn .tag{color:#fca5a5}
+.banner .time{font-size:12px;color:var(--text-sub)}
+.banner .msg{font-size:21px;font-weight:600;line-height:1.4}
+.banner .msg.idle{font-size:15px;font-weight:400;color:var(--text-sub)}
 
-        .logo { display: flex; align-items: center; gap: 10px; }
+/* Right column cards */
+.col{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+.card h3{font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-sub);
+  margin-bottom:13px;display:flex;align-items:center;gap:8px}
 
-        .logo-mark {
-            width: 32px; height: 32px;
-            background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 60%, #60a5fa 100%);
-            border-radius: 9px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 16px;
-            box-shadow: 0 3px 12px rgba(59,130,246,0.38);
-        }
+/* Status grid */
+.stat{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat .item{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.stat .item .k{font-size:11px;color:var(--text-sub);text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px}
+.stat .item .v{font-size:16px;font-weight:700}
+.stat .item .v.on{color:#86efac} .stat .item .v.off{color:var(--text-sub)}
+.stat .item.full{grid-column:1/3}
 
-        .logo-name {
-            font-size: 15px; font-weight: 700; letter-spacing: -0.3px;
-            background: linear-gradient(120deg, #fff 40%, #93c5fd);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
+/* Detection chips */
+.chips{display:flex;flex-wrap:wrap;gap:8px;min-height:24px}
+.chip{display:flex;align-items:center;gap:7px;font-size:14px;font-weight:600;padding:7px 13px;
+  border-radius:999px;background:var(--card2);border:1px solid var(--line)}
+.chip.danger{background:var(--red-bg);border-color:var(--red);color:#fecaca}
+.chip .n{font-size:11px;color:var(--text-sub)}
+.empty{color:var(--text-sub);font-size:14px}
 
-        .header-right { display: flex; align-items: center; gap: 10px; }
+/* Alert log */
+.log{display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto}
+.log .entry{display:flex;gap:11px;font-size:14px;line-height:1.45;padding:9px 12px;border-radius:11px;
+  background:var(--card2);border:1px solid var(--line)}
+.log .entry.warn{background:var(--red-bg);border-color:rgba(239,68,68,.5)}
+.log .entry .t{flex-shrink:0;font-size:12px;color:var(--text-sub);font-variant-numeric:tabular-nums}
+.log .entry .x{flex:1}
 
-        .badge {
-            background: rgba(10,30,70,0.6);
-            border: 1px solid var(--border);
-            border-radius: 20px; padding: 4px 12px;
-            font-size: 11px; color: var(--text-muted);
-            font-weight: 500; letter-spacing: 0.3px;
-            backdrop-filter: blur(8px);
-        }
+/* SOS */
+.sos-card{border-color:rgba(239,68,68,.4)}
+.sos-card.active{background:var(--red-bg);border-color:var(--red)}
+.sos-card a{color:var(--accent2);word-break:break-all;font-size:13px}
+.sos-row{display:flex;justify-content:space-between;font-size:14px;padding:5px 0}
+.sos-row .k{color:var(--text-sub)}
 
-        .online-pill {
-            display: flex; align-items: center; gap: 5px;
-            background: rgba(10,30,70,0.6);
-            border: 1px solid var(--border);
-            border-radius: 20px; padding: 4px 12px;
-            font-size: 11px; color: var(--text-muted);
-            backdrop-filter: blur(8px);
-        }
-        .online-dot {
-            width: 6px; height: 6px; border-radius: 50%;
-            background: var(--green);
-            box-shadow: 0 0 5px var(--green);
-            animation: blink 2.4s ease-in-out infinite;
-        }
-        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
-
-        /* ── Grid ── */
-        .wrap { position: relative; z-index: 1; padding: 20px 20px 32px; }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-        }
-        @media (max-width: 900px) { .grid { grid-template-columns: repeat(2,1fr); } }
-        @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
-
-        /* ── Device card ── */
-        .card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 18px;
-            overflow: hidden;
-            display: flex; flex-direction: column;
-            backdrop-filter: blur(14px);
-            transition: border-color 0.3s;
-        }
-        .card.alert-active {
-            border-color: rgba(248,113,113,0.35);
-        }
-        .card.nav-active {
-            border-color: rgba(59,130,246,0.35);
-        }
-
-        /* Card header row */
-        .card-head {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 12px 14px 10px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .card-title-row { display: flex; align-items: center; gap: 8px; }
-
-        .status-dot {
-            width: 8px; height: 8px; border-radius: 50%;
-            background: var(--text-muted);
-            transition: all 0.4s; flex-shrink: 0;
-        }
-        .status-dot.active {
-            background: var(--green);
-            box-shadow: 0 0 6px var(--green);
-            animation: blink 2.4s ease-in-out infinite;
-        }
-
-        .card-title {
-            font-size: 12px; font-weight: 600;
-            letter-spacing: 0.8px; text-transform: uppercase;
-            color: var(--text-sub);
-        }
-
-        .nav-badge {
-            display: none;
-            font-size: 10px; font-weight: 600;
-            color: var(--accent);
-            background: var(--navy-soft);
-            border: 1px solid rgba(59,130,246,0.25);
-            border-radius: 8px; padding: 2px 8px;
-            letter-spacing: 0.5px; text-transform: uppercase;
-        }
-        .nav-badge.show { display: block; }
-
-        /* Camera */
-        .cam-wrap {
-            position: relative;
-            background: #000;
-            aspect-ratio: 4/3;
-            overflow: hidden;
-        }
-
-        .cam-feed {
-            width: 100%; height: 100%;
-            object-fit: cover; display: block;
-        }
-
-        /* Corner brackets on camera */
-        .bk {
-            position: absolute;
-            width: 16px; height: 16px;
-            border-color: rgba(52,211,153,0.45);
-            border-style: solid; pointer-events: none;
-        }
-        .bk.tl { top:7px; left:7px;   border-width:2px 0 0 2px; border-radius:3px 0 0 0; }
-        .bk.tr { top:7px; right:7px;  border-width:2px 2px 0 0; border-radius:0 3px 0 0; }
-        .bk.bl { bottom:7px; left:7px;  border-width:0 0 2px 2px; border-radius:0 0 0 3px; }
-        .bk.br { bottom:7px; right:7px; border-width:0 2px 2px 0; border-radius:0 0 3px 0; }
-
-        /* Alert row */
-        .card-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
-
-        .alert-label {
-            font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
-            color: var(--accent); font-weight: 600;
-        }
-
-        .alert-text {
-            font-size: 14px; font-weight: 600; line-height: 1.45;
-            color: var(--text); min-height: 42px;
-        }
-        .alert-text.idle { font-size: 13px; font-weight: 400; color: var(--text-muted); }
-        .alert-text.warn { color: var(--red); }
-        .alert-text.nav  { color: #93c5fd; }
-
-        .time-label {
-            font-size: 11px; color: var(--text-muted); letter-spacing: 0.3px;
-        }
-
-        /* ── Footer ── */
-        .footer {
-            text-align: center; padding-bottom: 20px;
-            font-size: 11px; color: var(--text-muted); letter-spacing: 1px;
-        }
-    </style>
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
 </head>
 <body>
 
-    <header class="header">
-        <div class="logo">
-            <div class="logo-mark">👁</div>
-            <span class="logo-name">SmartEyes AI — Monitor</span>
-        </div>
-        <div class="header-right">
-            <div class="badge" id="onlineCount">0 / 3 online</div>
-            <div class="online-pill">
-                <div class="online-dot"></div>
-                <span>Live</span>
-            </div>
-        </div>
-    </header>
+<div class="topbar">
+  <div class="brand"><span class="eye">👁</span> SmartEye Pro <small>Bảng giám sát</small></div>
+  <div class="badges">
+    <div class="badge" id="bDevice"><span>🖥️</span><span id="deviceTxt">—</span></div>
+    <div class="badge" id="bDepth"><span>📏</span><span id="depthTxt">Độ sâu</span></div>
+    <div class="badge off" id="bLive"><span class="dot"></span><span id="liveTxt">Mất kết nối</span></div>
+  </div>
+</div>
 
-    <div class="wrap">
-        <div class="grid" id="grid"></div>
+<div class="wrap">
+
+  <!-- Cot trai: camera + canvas khung + banner -->
+  <div>
+    <div class="stage">
+      <img id="feed" alt="">
+      <canvas id="overlay"></canvas>
+      <div class="cam-tag" id="camTag">Điện thoại đang thấy</div>
+      <div class="fps" id="fps">0 fps</div>
+      <div class="noSignal" id="noSignal"><div class="ic">📵</div>
+        <div>Chưa có tín hiệu từ điện thoại</div>
+        <div style="font-size:13px;opacity:.7">Mở app trên điện thoại và nhấn “Bắt đầu”</div></div>
     </div>
 
-    <div class="footer">Auto-refresh &bull; SmartEyes AI</div>
+    <div class="banner" id="banner">
+      <div class="row"><span class="tag" id="bannerTag">Trạng thái</span><span class="time" id="bannerTime">--:--:--</span></div>
+      <div class="msg idle" id="bannerMsg">Đang chờ dữ liệu…</div>
+    </div>
+  </div>
 
-    <script>
-        const DEVICES = ['1', '2', '3'];
-        const POLL_MS = 800;
+  <!-- Cot phai: cac the trang thai -->
+  <div class="col">
 
-        const grid = document.getElementById('grid');
-        const cards = {};
-        let onlineSet = new Set();
+    <div class="card">
+      <h3>📊 Trạng thái</h3>
+      <div class="stat">
+        <div class="item"><div class="k">Chế độ</div><div class="v" id="vMode">—</div></div>
+        <div class="item"><div class="k">Dẫn đường</div><div class="v off" id="vNav">Tắt</div></div>
+        <div class="item full"><div class="k">Mục tiêu dẫn đường</div><div class="v off" id="vGoal">Không</div></div>
+      </div>
+    </div>
 
-        DEVICES.forEach(id => {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.id = `card-${id}`;
-            card.innerHTML = `
-                <div class="card-head">
-                    <div class="card-title-row">
-                        <div class="status-dot" id="dot-${id}"></div>
-                        <span class="card-title">Thiết bị ${id}</span>
-                    </div>
-                    <div class="nav-badge" id="nav-${id}">Dẫn đường</div>
-                </div>
-                <div class="cam-wrap">
-                    <img class="cam-feed" id="cam-${id}" src="/frame/${id}" alt="cam ${id}">
-                    <div class="bk tl"></div>
-                    <div class="bk tr"></div>
-                    <div class="bk bl"></div>
-                    <div class="bk br"></div>
-                </div>
-                <div class="card-body">
-                    <div class="alert-label">Cảnh báo</div>
-                    <div class="alert-text idle" id="alert-${id}">Chưa có tín hiệu...</div>
-                    <div class="time-label" id="time-${id}">--:--:--</div>
-                </div>
-            `;
-            grid.appendChild(card);
-            cards[id] = {
-                dot:      card.querySelector(`#dot-${id}`),
-                alert:    card.querySelector(`#alert-${id}`),
-                time:     card.querySelector(`#time-${id}`),
-                nav:      card.querySelector(`#nav-${id}`),
-                cardEl:   card,
-                lastTs:   0,
-                idleTimer: null,
-            };
-        });
+    <div class="card">
+      <h3>🎯 Đang phát hiện <span id="detCount" style="color:var(--text-sub);font-weight:600"></span></h3>
+      <div class="chips" id="chips"><span class="empty">Chưa phát hiện vật thể nào</span></div>
+    </div>
 
-        function updateOnlineCount() {
-            document.getElementById('onlineCount').textContent =
-                `${onlineSet.size} / ${DEVICES.length} online`;
-        }
+    <div class="card">
+      <h3>📜 Nhật ký cảnh báo</h3>
+      <div class="log" id="log"><span class="empty">Chưa có cảnh báo</span></div>
+    </div>
 
-        async function pollDevice(id) {
-            try {
-                const res = await fetch(`/alert_state?device_id=${id}`);
-                if (!res.ok) return;
-                const data = await res.json();
-                const c = cards[id];
+    <div class="card sos-card" id="sosCard">
+      <h3>🆘 SOS gần nhất</h3>
+      <div id="sosBody"><span class="empty">Chưa có yêu cầu SOS</span></div>
+    </div>
 
-                if (data.timestamp > 0) {
-                    c.dot.classList.add('active');
-                    if (!onlineSet.has(id)) { onlineSet.add(id); updateOnlineCount(); }
-                }
+  </div>
+</div>
 
-                if (data.timestamp > c.lastTs && data.label !== '') {
-                    c.lastTs = data.timestamp;
-                    const isNav = data.label.startsWith('nav_');
-                    c.alert.textContent = (isNav ? '🧭 ' : '⚠️ ') + data.message;
-                    c.alert.className = 'alert-text' + (isNav ? ' nav' : ' warn');
-                    c.cardEl.classList.toggle('alert-active', !isNav);
-                    c.cardEl.classList.toggle('nav-active', isNav);
-                    const d = new Date(data.timestamp * 1000);
-                    c.time.textContent = d.toLocaleTimeString('vi-VN');
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const feed=$('feed'), overlay=$('overlay'), octx=overlay.getContext('2d');
 
-                    clearTimeout(c.idleTimer);
-                    c.idleTimer = setTimeout(() => {
-                        c.alert.textContent = 'Đang quan sát...';
-                        c.alert.className = 'alert-text idle';
-                        c.cardEl.classList.remove('alert-active', 'nav-active');
-                    }, 6000);
-                }
-            } catch (_) {}
-        }
+let lastAlertTs=0, frameShape=[640,360], dets=[];
+let frameTimes=[], lastSosTime=0, ocrActive=false;
 
-        async function pollNavMode(id) {
-            try {
-                const res = await fetch(`/nav_mode/${id}`);
-                if (!res.ok) return;
-                const data = await res.json();
-                cards[id].nav.classList.toggle('show', !!data.nav_mode);
-            } catch (_) {}
-        }
+/* ---- Tai frame lien tuc (khong cho cache) ---- */
+function refreshFrame(){
+  const img=new Image();
+  img.onload=()=>{
+    feed.src=img.src;
+    frameTimes.push(performance.now());
+    if(frameTimes.length>20)frameTimes.shift();
+  };
+  img.onerror=()=>{};
+  img.src='/api/monitor_frame?t='+Date.now();
+}
 
-        DEVICES.forEach(id => {
-            setInterval(() => pollDevice(id), POLL_MS);
-            setInterval(() => pollNavMode(id), 2000);
-            pollDevice(id);
-            pollNavMode(id);
+/* ---- Ve khung nhan dien len canvas overlay ---- */
+function drawBoxes(){
+  const r=feed.getBoundingClientRect();
+  // kich thuoc anh hien thi that (object-fit:contain)
+  const natW=feed.naturalWidth||frameShape[0], natH=feed.naturalHeight||frameShape[1];
+  if(!natW||!natH){octx.clearRect(0,0,overlay.width,overlay.height);return;}
+  overlay.width=r.width; overlay.height=r.height;
+  const scale=Math.min(r.width/natW, r.height/natH);
+  const dispW=natW*scale, dispH=natH*scale;
+  const offX=(r.width-dispW)/2, offY=(r.height-dispH)/2;
+  // toa do detection theo frameShape (luc suy luan) -> map sang anh hien thi
+  const sx=dispW/frameShape[0], sy=dispH/frameShape[1];
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  octx.lineWidth=2; octx.font='600 13px Segoe UI, sans-serif';
+  for(const d of dets){
+    const x=offX+d.x1*sx, y=offY+d.y1*sy, w=(d.x2-d.x1)*sx, h=(d.y2-d.y1)*sy;
+    const col=d.danger?'#ef4444':'#3b82f6';
+    octx.strokeStyle=col; octx.strokeRect(x,y,w,h);
+    const label=d.vn+(d.tid>=0?' #'+d.tid:'');
+    const tw=octx.measureText(label).width+12;
+    octx.fillStyle=col; octx.fillRect(x,Math.max(0,y-20),tw,20);
+    octx.fillStyle='#fff'; octx.fillText(label,x+6,Math.max(13,y-6));
+  }
+}
 
-            const img = document.getElementById(`cam-${id}`);
-            setInterval(() => { img.src = `/frame/${id}?t=${Date.now()}`; }, 200);
-        });
-    </script>
+/* ---- Banner cap nhat ---- */
+function updateBanner(alert){
+  const msg=$('bannerMsg'), banner=$('banner');
+  if(alert.message){
+    msg.textContent=alert.message; msg.classList.remove('idle');
+    const warn=!!alert.danger;
+    banner.classList.toggle('warn',warn);
+    banner.classList.toggle('safe',!warn);
+    $('bannerTag').textContent=ocrActive?'📖 Đọc chữ':(warn?'⚠ Cảnh báo':'Phát hiện');
+    $('bannerTime').textContent=new Date(alert.timestamp*1000).toLocaleTimeString('vi-VN');
+  }
+}
+
+/* ---- Nhat ky ---- */
+function pushLog(alert){
+  const log=$('log');
+  const e=log.querySelector('.empty'); if(e)e.remove();
+  const row=document.createElement('div');
+  row.className='entry'+(alert.danger?' warn':'');
+  row.innerHTML='<span class="t">'+new Date(alert.timestamp*1000).toLocaleTimeString('vi-VN')+
+    '</span><span class="x"></span>';
+  row.querySelector('.x').textContent=alert.message;
+  log.prepend(row);
+  while(log.children.length>40)log.removeChild(log.lastChild);
+}
+
+/* ---- Chips vat the ---- */
+function updateChips(labelsVn, detList){
+  const chips=$('chips'); chips.innerHTML='';
+  if(!labelsVn.length){chips.innerHTML='<span class="empty">Chưa phát hiện vật thể nào</span>';
+    $('detCount').textContent=''; return;}
+  // dem so luong moi nhan
+  const count={}, danger={};
+  for(const d of detList){count[d.vn]=(count[d.vn]||0)+1; if(d.danger)danger[d.vn]=true;}
+  const names=Object.keys(count).length?Object.keys(count):labelsVn;
+  $('detCount').textContent='('+detList.length+')';
+  for(const name of names){
+    const c=document.createElement('span');
+    c.className='chip'+(danger[name]?' danger':'');
+    c.innerHTML='<span>'+name+'</span>'+(count[name]>1?'<span class="n">×'+count[name]+'</span>':'');
+    chips.appendChild(c);
+  }
+}
+
+/* ---- SOS ---- */
+function updateSos(sos){
+  if(!sos||!sos.url){return;}
+  const card=$('sosCard'), body=$('sosBody');
+  const fresh=(Date.now()/1000 - sos.time) < 120;
+  card.classList.toggle('active',fresh);
+  if(sos.time!==lastSosTime){
+    lastSosTime=sos.time;
+    body.innerHTML=
+      '<div class="sos-row"><span class="k">Thời gian</span><span>'+new Date(sos.time*1000).toLocaleTimeString('vi-VN')+'</span></div>'+
+      '<div class="sos-row"><span class="k">Tọa độ</span><span>'+sos.lat.toFixed(5)+', '+sos.lng.toFixed(5)+'</span></div>'+
+      (sos.acc?'<div class="sos-row"><span class="k">Sai số</span><span>±'+Math.round(sos.acc)+' m</span></div>':'')+
+      '<div style="margin-top:8px"><a href="'+sos.url+'" target="_blank">📍 Mở Google Maps</a></div>';
+  }
+}
+
+/* ---- Vong poll trang thai ---- */
+async function poll(){
+  try{
+    const d=await(await fetch('/api/monitor')).json();
+    frameShape=d.frame_shape||frameShape;
+    dets=d.detections||[];
+
+    // ket noi / live
+    const live=d.has_frame && d.frame_age<3;
+    $('bLive').className='badge '+(live?'live':'off');
+    $('liveTxt').textContent=live?'Trực tiếp':'Mất kết nối';
+    $('noSignal').classList.toggle('hide',d.has_frame && d.frame_age<8);
+
+    // badge thiet bi / do sau
+    $('deviceTxt').textContent=d.device;
+    $('bDepth').className='badge'+(d.depth_available?' ok':'');
+    $('depthTxt').textContent=d.depth_available?'Độ sâu: bật':'Độ sâu: tắt';
+
+    // trang thai
+    ocrActive=!!d.ocr_active;
+    $('vMode').textContent=ocrActive?'Đọc chữ':(d.mode==='ai'?'Hỏi AI':'Phát hiện');
+    const nav=$('vNav'); nav.textContent=d.nav_mode?'Bật':'Tắt';
+    nav.className='v '+(d.nav_mode?'on':'off');
+    const goal=$('vGoal');
+    if(d.goal){goal.textContent='→ '+(d.goal_vn||d.goal); goal.className='v on';}
+    else{goal.textContent='Không'; goal.className='v off';}
+
+    updateChips(d.active_labels_vn||[], dets);
+    updateSos(d.last_sos);
+
+    // canh bao moi
+    if(d.alert && d.alert.timestamp>lastAlertTs && d.alert.message){
+      lastAlertTs=d.alert.timestamp;
+      updateBanner(d.alert);
+      pushLog(d.alert);
+    }
+    drawBoxes();
+  }catch(e){
+    $('bLive').className='badge off'; $('liveTxt').textContent='Mất máy chủ';
+  }
+}
+
+/* ---- FPS ---- */
+function updateFps(){
+  if(frameTimes.length>1){
+    const span=(frameTimes[frameTimes.length-1]-frameTimes[0])/1000;
+    const fps=span>0?((frameTimes.length-1)/span):0;
+    $('fps').textContent=fps.toFixed(0)+' fps';
+  }else $('fps').textContent='0 fps';
+}
+
+refreshFrame();
+setInterval(refreshFrame,66);    // ~15 fps anh
+setInterval(poll,300);           // trang thai + khung
+setInterval(updateFps,1000);
+window.addEventListener('resize',drawBoxes);
+poll();
+</script>
 </body>
 </html>
