@@ -25,7 +25,10 @@ import socket
 import argparse
 import threading
 import queue
+import warnings
 from collections import deque
+
+warnings.filterwarnings("ignore", message=".*pin_memory.*no accelerator", category=UserWarning)
 
 import cv2
 import numpy as np
@@ -107,6 +110,7 @@ APPROACH_RATIO       = 1.40      # fallback khong co do sau: can tang 40% dien t
 
 # --- Dan duong free-space (tu depth map, met) ---
 NAV_COOLDOWN        = 2.0
+NAV_URGENT_COOLDOWN = 1.5        # khoang toi thieu giua 2 lan ho "dung lai"
 NAV_REPEAT_COOLDOWN = 5.0
 NAV_STOP_M  = 1.2                # vat gan hon -> dung lai
 NAV_SLOW_M  = 2.0                # vat gan hon -> phai re/di cham (nhay hon truoc)
@@ -124,7 +128,7 @@ GOAL_AVOID_MARGIN_M  = 0.5
 GOAL_COOLDOWN        = 1.5
 GOAL_NEAR_LOST_M     = 1.5
 
-FOCAL_LENGTH_PX = 600            # tieu cu uoc tinh cho camera dien thoai ~720p
+FOCAL_LENGTH_PX = 480            # tieu cu/calib cho camera ~720p (giam neu do bi XA hon thuc te, tang neu bi GAN hon)
 
 # Dich nhan sang tieng Viet (de hien thi va doc cho de hieu)
 VIET_LABELS = {
@@ -133,6 +137,24 @@ VIET_LABELS = {
     "dog": "chó", "cat": "mèo", "bench": "ghế đá",
     "chair": "ghế", "dining table": "cái bàn", "door": "cửa",
     "stairs": "cầu thang", "fan": "quạt",
+}
+# Tu khoa rut gon / dong nghia khi nguoi dung doc lenh dan duong
+# (nguoi dung thuong noi "ban" thay vi "cai ban", "o to"/"xe" thay vi "xe hoi"...)
+LABEL_ALIASES = {
+    "person": ["người", "ai đó"],
+    "car": ["xe hơi", "ô tô", "oto", "xe ô tô"],
+    "motorcycle": ["xe máy", "mô tô", "xe gắn máy"],
+    "bicycle": ["xe đạp"],
+    "bus": ["xe buýt", "xe bus"],
+    "truck": ["xe tải"],
+    "dog": ["chó", "con chó"],
+    "cat": ["mèo", "con mèo"],
+    "bench": ["ghế đá", "băng ghế"],
+    "chair": ["ghế", "cái ghế"],
+    "dining table": ["cái bàn", "bàn", "cái bàn ăn", "bàn ăn"],
+    "door": ["cửa", "cái cửa", "cửa ra vào"],
+    "stairs": ["cầu thang", "bậc thang", "thang"],
+    "fan": ["quạt", "cái quạt", "quạt máy"],
 }
 DANGER = {"person", "car", "motorcycle", "bus", "truck", "bench",
           "bicycle", "cat", "dog", "chair", "dining table", "door", "stairs", "fan"}
@@ -521,13 +543,18 @@ def _nav_guidance(state, tracked, frame_width, now):
     else:
         key, dist = _semantic_nav_fallback(tracked, frame_width)
     msg = NAV_MESSAGES[key]
-    # "dung lai" la canh bao khan -> phan ung ngay, khong bi cooldown/chong lap chan
+    # "dung lai" la canh bao khan -> phan ung nhanh (chi cho mot khoang ngan de khoi spam)
     urgent = key == "nav_blocked"
-    if not urgent and now - state.get("last_nav_spoken", 0) < NAV_COOLDOWN:
-        return
-    if (not urgent and msg == state.get("last_nav_message", "") and state.get("last_nav_src") == "nav"
-            and now - state.get("last_nav_spoken", 0) < NAV_REPEAT_COOLDOWN):
-        return
+    gap = now - state.get("last_nav_spoken", 0)
+    if urgent:
+        if gap < NAV_URGENT_COOLDOWN:
+            return
+    else:
+        if gap < NAV_COOLDOWN:
+            return
+        if (msg == state.get("last_nav_message", "") and state.get("last_nav_src") == "nav"
+                and gap < NAV_REPEAT_COOLDOWN):
+            return
     danger = key in ("nav_blocked", "nav_caution")
     _set_alert(state, msg, danger=danger, src="nav", nav_key=key)
     print(f"[NAV] {msg} (gan nhat={dist:.1f}m)")
@@ -630,8 +657,15 @@ def _parse_goal_command(text, current_goal=None):
         return ("stop", None)
     if not any(_word_in(tr, t) for tr in _GOAL_TRIGGERS):
         return None
-    for lbl, vn in sorted(VIET_LABELS.items(), key=lambda kv: -len(kv[1])):
-        if _word_in(vn, t):
+    # Khop ten vat: gom ten chinh + cac tu dong nghia/rut gon, uu tien cum DAI nhat
+    # de "ghe da" khong bi "ghe" nuot mat, va "ban" van khop "cai ban".
+    candidates = []  # (do_dai_cum, label, phrase)
+    for lbl, vn in VIET_LABELS.items():
+        phrases = {vn, *LABEL_ALIASES.get(lbl, [])}
+        for p in phrases:
+            candidates.append((len(p), lbl, p))
+    for _, lbl, phrase in sorted(candidates, key=lambda c: -c[0]):
+        if _word_in(phrase, t):
             return ("start", lbl)
     if current_goal:
         return ("start", current_goal)
@@ -686,8 +720,8 @@ def run_ocr(img):
     # mag_ratio phong to noi bo giup bat chu nho; paragraph=False de tu sap xep.
     results = reader.readtext(
         proc, detail=1, paragraph=False,
-        text_threshold=0.5, low_text=0.3, link_threshold=0.4,
-        mag_ratio=1.5, width_ths=0.8, ycenter_ths=0.6, add_margin=0.15,
+        text_threshold=0.5, low_text=0.3, link_threshold=0.2,
+        mag_ratio=1.0, width_ths=1.0, ycenter_ths=0.5, add_margin=0.1,
     )
     items = []
     for box, text, conf in results:
@@ -723,16 +757,72 @@ def run_ocr(img):
 # ===========================================================================
 # Hoi dap AI - OpenRouter Vision (tuy chon, can OPENROUTER_API_KEY)
 # ===========================================================================
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-if not OPENROUTER_API_KEY:
+
+
+def _load_api_keys():
+    """Gom nhieu API key OpenRouter de chay du phong (key chinh het -> nhay key phu).
+    Ho tro 2 cach khai bao trong .env:
+      OPENROUTER_API_KEY=key1,key2,key3            (cach nhau dau phay)
+      OPENROUTER_API_KEY=key1
+      OPENROUTER_API_KEY_2=key2
+      OPENROUTER_API_KEY_3=key3 ...                (den _5)
+    """
+    raw = []
+    for part in os.environ.get("OPENROUTER_API_KEY", "").split(","):
+        raw.append(part.strip())
+    for i in range(2, 6):
+        raw.append(os.environ.get(f"OPENROUTER_API_KEY_{i}", "").strip())
+    seen, keys = set(), []
+    for k in raw:
+        if k and k not in seen:
+            seen.add(k)
+            keys.append(k)
+    return keys
+
+
+OPENROUTER_API_KEYS = _load_api_keys()
+OPENROUTER_API_KEY = OPENROUTER_API_KEYS[0] if OPENROUTER_API_KEYS else ""  # tuong thich code cu
+if not OPENROUTER_API_KEYS:
     print("[AI] CANH BAO: chua co OPENROUTER_API_KEY (.env) -> che do hoi dap AI se loi.")
+else:
+    print(f"[AI] Da nap {len(OPENROUTER_API_KEYS)} API key OpenRouter (du phong xoay vong).")
 
 _FREE_VISION_MODELS = [
     "meta-llama/llama-4-maverick:free",
     "nvidia/nemotron-nano-12b-v2-vl:free",
 ]
-_model_exhausted = {}
+# OCR dung thu tu rieng: uu tien nemotron (maverick danh cho che do hoi AI)
+_OCR_VISION_MODELS = [
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "meta-llama/llama-4-maverick:free",
+]
+# Danh dau tam ngung theo tung cap (model, key) -> thoi diem het han nghi (epoch giay).
+# Nho vay 1 key bi het quota khong lam "chet" key khac, va het han thi tu thu lai.
+_exhausted = {}
+
+
+def _is_exhausted(model, key):
+    return time.time() < _exhausted.get((model, key), 0)
+
+
+def _cooldown_for(err_str):
+    """Chon thoi gian nghi dua tren loi tra ve.
+    - 401/403/het han/key sai  -> nghi ca ngay (key hong, dung phi request).
+    - 429 kem 'per day/daily'   -> het quota ngay, nghi ca ngay.
+    - 429 con lai (rate/phut)   -> nghi ngan 60s roi thu lai.
+    - 404 (model khong hop le)  -> nghi ca ngay voi cap nay.
+    """
+    s = err_str.lower()
+    if any(x in s for x in ("401", "403", "expired", "invalid", "no auth", "user not found")):
+        return 86400
+    if "429" in s:
+        if any(x in s for x in ("per day", "per-day", "daily", "free-models-per-day", "day")):
+            return 86400
+        return 60
+    if "404" in s:
+        return 86400
+    return 0
 
 _SYSTEM_PROMPT = (
     "Bạn là mắt AI cho người khiếm thị, trả lời bằng tiếng Việt rõ ràng, đầy đủ, đúng trọng tâm. "
@@ -743,10 +833,6 @@ _SYSTEM_PROMPT = (
     "Không bịa khi không chắc; không tả màu sắc hay ngoại hình rườm rà. "
     "Không từ chối, không hỏi lại — đi thẳng vào nội dung."
 )
-
-
-def _is_exhausted(model):
-    return (time.time() - _model_exhausted.get(model, 0)) < 86400
 
 
 def _resize_image_b64(image_b64, max_side=512):
@@ -760,18 +846,41 @@ def _resize_image_b64(image_b64, max_side=512):
     return base64.b64encode(buf.tobytes()).decode()
 
 
-def _call_one_model(model, messages):
-    payload = {"model": model, "messages": messages, "max_tokens": 180, "temperature": 0.3}
+def _call_one_model(model, messages, key, max_tokens=180, temperature=0.3):
+    payload = {"model": model, "messages": messages,
+               "max_tokens": max_tokens, "temperature": temperature}
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "HTTP-Referer": "https://smarteye.local",
         "X-Title": "SmartEye Pro",
     }
     resp = http_requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=25)
     if not resp.ok:
-        print(f"[AI] {model} HTTP {resp.status_code}: {resp.text[:200]}")
-        resp.raise_for_status()
+        body = resp.text[:200]
+        print(f"[AI] {model} HTTP {resp.status_code}: {body}")
+        # Nem kem status + body de _try_model chon thoi gian nghi phu hop
+        raise RuntimeError(f"HTTP {resp.status_code}: {body}")
     return (resp.json()["choices"][0]["message"]["content"] or "").strip()
+
+
+def _try_model(model, messages, **kw):
+    """Goi 1 model, tu dong xoay vong qua cac API key con kha dung.
+    Tra ve text (co the rong) tu key dau tien goi duoc; raise neu moi key deu loi."""
+    errs = []
+    for idx, key in enumerate(OPENROUTER_API_KEYS, 1):
+        if _is_exhausted(model, key):
+            continue
+        try:
+            return _call_one_model(model, messages, key, **kw)
+        except Exception as e:
+            s = str(e)
+            cd = _cooldown_for(s)
+            if cd:
+                _exhausted[(model, key)] = time.time() + cd
+            errs.append(f"key#{idx}: {e}")
+            print(f"[AI] {model} key#{idx} -> {e}"
+                  + (f" (nghi {cd}s)" if cd else ""))
+    raise RuntimeError(f"{model}: tat ca key loi ({'; '.join(errs) or 'deu dang nghi'})")
 
 
 def query_ai(image_b64, user_text, history=None):
@@ -790,19 +899,54 @@ def query_ai(image_b64, user_text, history=None):
     })
     errors = []
     for m in _FREE_VISION_MODELS:
-        if _is_exhausted(m):
-            continue
         try:
-            text = _call_one_model(m, messages)
+            text = _try_model(m, messages)
             if text:
                 return text
         except Exception as e:
-            s = str(e)
-            if "429" in s or "404" in s:
-                _model_exhausted[m] = time.time()
-            errors.append(f"{m}: {e}")
-            print(f"[AI] {m} -> {e}")
-    raise Exception(f"Tat ca model deu loi: {errors}")
+            errors.append(str(e))
+    raise Exception(f"Tat ca model/key deu loi: {errors}")
+
+
+_OCR_PROMPT = (
+    "Nhiệm vụ DUY NHẤT: đọc chính xác TẤT CẢ chữ trong ảnh, theo đúng thứ tự đọc "
+    "(trên xuống dưới, trái sang phải). Chỉ in ra phần chữ đọc được; mỗi dòng riêng "
+    "biệt xuống một dòng mới. Giữ nguyên tiếng Việt CÓ DẤU, đúng chính tả như trong ảnh. "
+    "TUYỆT ĐỐI không thêm mô tả, không giải thích, không dịch, không suy đoán chữ bị che/mờ. "
+    "Nếu trong ảnh không có chữ nào, chỉ trả về đúng một dòng: Không tìm thấy chữ nào."
+)
+_OCR_NO_TEXT = "không tìm thấy chữ nào"
+
+
+def ocr_via_llm(image_b64):
+    """Doc chu bang Vision LLM (chinh xac hon EasyOCR voi chu thuc te).
+    Tra ve chuoi chu, "" neu khong co chu, hoac None neu khong goi duoc model."""
+    if not OPENROUTER_API_KEY:
+        return None
+    if ',' in image_b64:
+        image_b64 = image_b64.split(',')[1]
+    b64 = _resize_image_b64(image_b64, max_side=1280)   # to hon mac dinh de bat chu nho
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            {"type": "text", "text": _OCR_PROMPT},
+        ],
+    }]
+    for m in _OCR_VISION_MODELS:
+        try:
+            text = _try_model(m, messages, max_tokens=700, temperature=0.0)
+        except Exception as e:
+            print(f"[OCR-AI] {m} -> {e}")
+            continue
+        if not text:
+            continue
+        text = text.strip()
+        # LLM bao khong co chu -> tra "" de tang cho EasyOCR thu lai
+        if _OCR_NO_TEXT in text.lower() and len(text) < len(_OCR_NO_TEXT) + 6:
+            return ""
+        return text
+    return None
 
 
 # ===========================================================================
@@ -824,6 +968,7 @@ def get_state():
                 "active_labels": [],
                 "mode": "yolo",
                 "nav_mode": False,
+                "ocr_active": False,
                 "frame_count": 0,
                 "last_spoken": {},
                 "last_seen": {},
@@ -838,6 +983,9 @@ def get_state():
                 "last_nav_src": None,
                 "last_nav_key": None,
                 "latest_frame_b64": None,
+                "latest_detections": [],
+                "latest_frame_shape": None,
+                "last_frame_time": 0,
                 "conversation_history": [],
                 "goal_target": None,
                 "goal_locked_tid": None,
@@ -898,6 +1046,15 @@ def _do_inference(state, frame):
 
     tracked = sorted(raw_dets, key=lambda d: (PRIORITY.get(d[4], 0), d[5]), reverse=True)
     state["active_labels"] = list({d[4] for d in tracked})
+
+    # Anh chup lai detection cho trang giam sat (toa do theo pixel cua frame nay)
+    state["latest_frame_shape"] = [frame_width, frame_height]
+    state["latest_detections"] = [
+        {"x1": round(d[0], 1), "y1": round(d[1], 1), "x2": round(d[2], 1), "y2": round(d[3], 1),
+         "label": d[4], "vn": VIET_LABELS.get(d[4], d[4]), "tid": d[6],
+         "danger": d[4] in ("car", "motorcycle", "bus", "truck", "stairs")}
+        for d in tracked
+    ]
 
     def _det_key(d):
         return f"t{d[6]}" if d[6] >= 0 else f"aux_{d[4]}"
@@ -1007,6 +1164,55 @@ def index():
     return send_from_directory("templates", "index.html")
 
 
+# ---------------------------------------------------------------------------
+# Trang giam sat tren may tinh: xem dien thoai dang "thay" gi (chi doc)
+# ---------------------------------------------------------------------------
+@app.route("/monitor")
+def monitor():
+    return send_from_directory("templates", "monitor.html")
+
+
+@app.route("/api/monitor")
+def api_monitor():
+    """Tra ve trang thai gon nhe cho trang giam sat (khong kem anh)."""
+    state = get_state()
+    now = time.time()
+    alert = dict(state["latest_alert"])
+    return jsonify({
+        "alert": alert,
+        "detections": state.get("latest_detections", []),
+        "frame_shape": state.get("latest_frame_shape"),
+        "active_labels": state.get("active_labels", []),
+        "active_labels_vn": [VIET_LABELS.get(l, l) for l in state.get("active_labels", [])],
+        "mode": state.get("mode", "yolo"),
+        "nav_mode": state.get("nav_mode", False),
+        "ocr_active": state.get("ocr_active", False),
+        "goal": state.get("goal_target"),
+        "goal_vn": VIET_LABELS.get(state.get("goal_target"), state.get("goal_target")),
+        "frame_age": round(now - state.get("last_frame_time", 0), 2),
+        "has_frame": state.get("latest_frame_b64") is not None,
+        "depth_available": _depth_model is not None,
+        "device": "GPU" if INFER_DEVICE == 0 else "CPU",
+        "last_sos": _last_sos,
+        "server_time": now,
+    })
+
+
+@app.route("/api/monitor_frame")
+def api_monitor_frame():
+    """Tra ve frame moi nhat (JPEG) ma dien thoai vua gui len."""
+    state = get_state()
+    b64 = state.get("latest_frame_b64")
+    if not b64:
+        return ("", 204)
+    try:
+        raw = base64.b64decode(b64.split(",", 1)[-1])
+    except Exception:
+        return ("", 204)
+    return app.response_class(raw, mimetype="image/jpeg",
+                              headers={"Cache-Control": "no-store"})
+
+
 @app.route("/process_frame", methods=["POST"])
 def process_frame():
     data = request.json
@@ -1014,6 +1220,11 @@ def process_frame():
         return jsonify({"error": "No image"}), 400
     state = get_state()
     state["latest_frame_b64"] = data['image']
+    state["last_frame_time"] = time.time()
+
+    # Dang doc chu -> tam dung phat hien (khoi ghi de canh bao/detection tren monitor)
+    if state.get("ocr_active"):
+        return _alert_response(state)
 
     # Che do AI khong chay YOLO (tru khi dang dan toi muc tieu)
     if state.get("mode") == "ai" and not state.get("goal_target"):
@@ -1060,6 +1271,26 @@ def toggle_nav_mode():
     msg = "Bật chế độ dẫn đường" if on else "Tắt chế độ dẫn đường"
     _set_alert(state, msg, danger=False)
     return jsonify({"nav_mode": on})
+
+
+@app.route("/ocr_mode", methods=["POST"])
+def set_ocr_mode():
+    """Dien thoai bao dang doc chu (OCR) hay khong. Khi bat: tam dung phat hien
+    va xoa canh bao/detection cu de trang giam sat khong hien nham."""
+    state = get_state()
+    data = request.json or {}
+    active = bool(data.get("active", False))
+    state["ocr_active"] = active
+    if active:
+        text = (data.get("text") or "").strip()
+        state["latest_alert"] = {
+            "message": text or "📖 Đang đọc chữ…",
+            "timestamp": time.time(), "danger": False, "obj_label": None,
+        }
+        state["latest_detections"] = []
+        state["active_labels"] = []
+        state["last_spoken"].clear()
+    return jsonify({"ocr_active": active})
 
 
 @app.route("/ai_query", methods=["POST"])
@@ -1128,15 +1359,31 @@ def clear_ai_history():
 
 @app.route("/api/ocr", methods=["POST"])
 def api_ocr():
-    """Doc chu trong anh (EasyOCR, offline, vi+en)."""
+    """Doc chu trong anh. Uu tien Vision LLM (chinh xac hon voi chu thuc te),
+    fallback EasyOCR offline khi het quota / mat mang / LLM khong thay chu."""
     try:
         data = request.get_json(force=True)
-        raw = data["image"].split(",", 1)[-1]
-        img = cv2.imdecode(np.frombuffer(base64.b64decode(raw), np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            return jsonify({"ok": False, "error": "Không giải mã được ảnh"}), 400
-        text = run_ocr(img)
-        return jsonify({"ok": True, "text": text,
+        image_b64 = data["image"]
+
+        # 1) Thu doc bang Vision LLM
+        engine = "ai"
+        text = None
+        try:
+            text = ocr_via_llm(image_b64)
+        except Exception as e:
+            print(f"[OCR-AI] Loi: {e}")
+            text = None
+
+        # 2) Fallback EasyOCR offline (khi LLM khong goi duoc hoac khong thay chu)
+        if not text:
+            raw = image_b64.split(",", 1)[-1]
+            img = cv2.imdecode(np.frombuffer(base64.b64decode(raw), np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                return jsonify({"ok": False, "error": "Không giải mã được ảnh"}), 400
+            text = run_ocr(img)
+            engine = "easyocr"
+
+        return jsonify({"ok": True, "text": text, "engine": engine,
                         "sentence": text if text else "Không tìm thấy chữ nào."})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1258,6 +1505,27 @@ def _ensure_cert(cert_path="cert.pem", key_path="key.pem"):
         return None, None
 
 
+def _open_monitor_when_ready(url, port, timeout=30.0):
+    """Cho server len (port nhan ket noi) roi mo trang giam sat tren trinh duyet PC."""
+    import webbrowser
+
+    def _wait_and_open():
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.4)
+        try:
+            webbrowser.open(url)
+            print(f"[Monitor] Da mo trang giam sat: {url}")
+        except Exception as e:
+            print(f"[Monitor] Khong tu mo duoc trinh duyet ({e}). Hay mo thu cong: {url}")
+
+    threading.Thread(target=_wait_and_open, daemon=True).start()
+
+
 def main():
     parser = argparse.ArgumentParser(description="SmartEye Pro AI server")
     parser.add_argument("--host", default="0.0.0.0")
@@ -1266,11 +1534,14 @@ def main():
                         help="Tat HTTPS (chi test tren laptop bang localhost)")
     parser.add_argument("--no-preload", action="store_true",
                         help="Khong tai truoc model khi khoi dong")
+    parser.add_argument("--no-open", action="store_true",
+                        help="Khong tu mo trang giam sat tren trinh duyet may tinh")
     args = parser.parse_args()
 
     _load_depth_model()
     if not args.no_preload:
         get_state()  # nap YOLO + dung worker ngay
+        threading.Thread(target=get_ocr, daemon=True, name="ocr-warmup").start()
 
     ip = get_lan_ip()
     use_ssl = not args.no_ssl
@@ -1284,7 +1555,13 @@ def main():
         print("  * HTTPS tu ky -> trinh duyet canh bao, bam 'Van tiep tuc'.")
     else:
         print("  * Mo bang dien thoai can HTTPS (bo --no-ssl) de camera/mic hoat dong.")
+    monitor_url = f"{scheme}://localhost:{args.port}/monitor"
+    print(f"  Giam sat (PC): {monitor_url}")
     print("=" * 64)
+
+    # Tu mo trang giam sat tren trinh duyet may tinh (sau khi server san sang)
+    if not args.no_open:
+        _open_monitor_when_ready(monitor_url, args.port)
 
     if use_ssl:
         cert_f, key_f = _ensure_cert()
